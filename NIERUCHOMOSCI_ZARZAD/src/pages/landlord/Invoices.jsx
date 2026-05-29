@@ -10,9 +10,14 @@ import {
   addExpense,
   deleteExpense,
   getPaymentTimeliness,
-  getMediaCostForPropertyAndMonth
+  getMediaCostForPropertyAndMonth,
+  getUsers,
+  addTenant,
+  updatePropertyTenant,
+  addMeterReading
 } from "../../utils/storage";
-import { CreditCard, Plus, Check, Calendar, PlusCircle, AlertTriangle, CheckCircle, FileText, Info, X, Sparkles, Trash2, Coins, TrendingUp } from "lucide-react";
+import { CreditCard, Plus, Check, Calendar, PlusCircle, AlertTriangle, CheckCircle, FileText, Info, X, Sparkles, Trash2, Coins, TrendingUp, History, UserPlus, Database, Layers } from "lucide-react";
+
 
 export default function LandlordInvoices({ landlordId }) {
   const [invoices, setInvoices] = useState([]);
@@ -55,11 +60,61 @@ export default function LandlordInvoices({ landlordId }) {
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
+  // History Wizard States
+  const [showHistoryWizard, setShowHistoryWizard] = useState(false);
+  const [wizardTab, setWizardTab] = useState("tenants");
+  const [allLandlordProperties, setAllLandlordProperties] = useState([]);
+  const [allTenants, setAllTenants] = useState([]);
+
+  // Tab 1: Tenant & Contracts States
+  const [histTenantName, setHistTenantName] = useState("");
+  const [histTenantEmail, setHistTenantEmail] = useState("");
+  const [histTenantPhone, setHistTenantPhone] = useState("");
+  const [histTenantIdCard, setHistTenantIdCard] = useState("");
+  const [histTenantAddress, setHistTenantAddress] = useState("");
+  const [histRoommateName, setHistRoommateName] = useState("");
+  const [histRoommatePhone, setHistRoommatePhone] = useState("");
+  const [histRoommateEmail, setHistRoommateEmail] = useState("");
+  const [histRoommateIdCard, setHistRoommateIdCard] = useState("");
+  const [histPropertyId, setHistPropertyId] = useState("none");
+  const [histLeaseStart, setHistLeaseStart] = useState("");
+  const [histLeaseEnd, setHistLeaseEnd] = useState("");
+  const [histRentAmount, setHistRentAmount] = useState("");
+  const [histPaymentDueDay, setHistPaymentDueDay] = useState("10");
+
+  // Tab 2: Invoices & Payments States
+  const [histInvPropertyId, setHistInvPropertyId] = useState("");
+  const [histInvTenantId, setHistInvTenantId] = useState("");
+  const [histInvTitle, setHistInvTitle] = useState("");
+  const [histInvRent, setHistInvRent] = useState("");
+  const [histInvAdmin, setHistInvAdmin] = useState("");
+  const [histInvUtilities, setHistInvUtilities] = useState("");
+  const [histInvIssueDate, setHistInvIssueDate] = useState("");
+  const [histInvDueDate, setHistInvDueDate] = useState("");
+  const [histInvStatus, setHistInvStatus] = useState("paid"); // "paid" | "partial" | "unpaid"
+  const [histInvReceived, setHistInvReceived] = useState("");
+  const [histInvPaymentDate, setHistInvPaymentDate] = useState("");
+  const [histInvNotes, setHistInvNotes] = useState("");
+
+  // Tab 3: Meters States
+  const [histMeterPropertyId, setHistMeterPropertyId] = useState("");
+  const [histMeterType, setHistMeterType] = useState("electricity");
+  const [histMeterNumber, setHistMeterNumber] = useState("");
+  const [histMeterValue, setHistMeterValue] = useState("");
+  const [histMeterDate, setHistMeterDate] = useState("");
+
   useEffect(() => {
     setInvoices(getInvoices().sort((a, b) => new Date(b.issueDate || b.createdAt) - new Date(a.issueDate || a.createdAt)));
     setExpenses(getExpenses().sort((a, b) => new Date(b.date) - new Date(a.date)));
+    
     const props = getPropertiesByLandlord(landlordId).filter(p => p.tenant_id !== null);
     setProperties(props);
+    
+    // For historical imports
+    const allProps = getPropertiesByLandlord(landlordId);
+    setAllLandlordProperties(allProps);
+    setAllTenants(getUsers().filter(u => u.role === "tenant"));
+
     if (props.length > 0) {
       setSelectedPropertyId(props[0].id);
       setAmountRent(props[0].rentAmount);
@@ -68,6 +123,241 @@ export default function LandlordInvoices({ landlordId }) {
       setExpensePropertyId(props[0].id);
     }
   }, [landlordId]);
+
+  // Pre-populate tenant & rent for historical invoices based on property selection
+  useEffect(() => {
+    if (histInvPropertyId) {
+      const prop = allLandlordProperties.find(p => p.id === histInvPropertyId);
+      if (prop) {
+        if (prop.tenant_id) {
+          setHistInvTenantId(prop.tenant_id);
+        } else {
+          setHistInvTenantId("");
+        }
+        setHistInvRent(String(prop.rentAmount || ""));
+      }
+    }
+  }, [histInvPropertyId, allLandlordProperties]);
+
+  // Pre-populate meter numbers for historical meter readings
+  useEffect(() => {
+    if (histMeterPropertyId && histMeterType) {
+      const storedMeters = localStorage.getItem("rentportal_meters_v3");
+      const allMeters = storedMeters ? JSON.parse(storedMeters) : [];
+      const readings = allMeters.filter(m => m.property_id === histMeterPropertyId && m.meter_type === histMeterType);
+      if (readings.length > 0) {
+        setHistMeterNumber(readings[0].meter_number || "");
+      } else {
+        if (histMeterType === "electricity") setHistMeterNumber("L-EL-9901");
+        else if (histMeterType === "gas") setHistMeterNumber("L-GAS-8802");
+        else if (histMeterType === "water_cold") setHistMeterNumber("L-WC-7703");
+        else if (histMeterType === "water_hot") setHistMeterNumber("L-WH-6604");
+        else if (histMeterType === "heating") setHistMeterNumber("L-HEAT-5505");
+      }
+    }
+  }, [histMeterPropertyId, histMeterType]);
+
+  const handleHistTenantSubmit = (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+    setSuccessMsg("");
+
+    if (!histTenantName.trim()) {
+      setErrorMsg("Imię i nazwisko lokatora jest wymagane.");
+      return;
+    }
+    if (!histTenantEmail.trim()) {
+      setErrorMsg("Adres e-mail jest wymagany.");
+      return;
+    }
+
+    try {
+      const newTenant = addTenant({
+        name: histTenantName.trim(),
+        email: histTenantEmail.trim(),
+        phone: histTenantPhone.trim(),
+        idCard: histTenantIdCard.trim(),
+        address: histTenantAddress.trim(),
+        roommate: histRoommateName.trim() ? {
+          name: histRoommateName.trim(),
+          phone: histRoommatePhone.trim(),
+          email: histRoommateEmail.trim(),
+          idCard: histRoommateIdCard.trim()
+        } : null
+      });
+
+      if (histPropertyId !== "none") {
+        updatePropertyTenant(
+          histPropertyId,
+          newTenant.id,
+          histLeaseStart || null,
+          histLeaseEnd || null,
+          histRentAmount ? Number(histRentAmount) : null,
+          histPaymentDueDay ? Number(histPaymentDueDay) : 10
+        );
+      }
+
+      setSuccessMsg(`Pomyślnie dodano lokatora ${newTenant.name}!`);
+      
+      // Reset fields
+      setHistTenantName("");
+      setHistTenantEmail("");
+      setHistTenantPhone("");
+      setHistTenantIdCard("");
+      setHistTenantAddress("");
+      setHistRoommateName("");
+      setHistRoommatePhone("");
+      setHistRoommateEmail("");
+      setHistRoommateIdCard("");
+      setHistPropertyId("none");
+      setHistLeaseStart("");
+      setHistLeaseEnd("");
+      setHistRentAmount("");
+      setHistPaymentDueDay("10");
+
+      // Refresh listings
+      const updatedProps = getPropertiesByLandlord(landlordId);
+      setAllLandlordProperties(updatedProps);
+      setProperties(updatedProps.filter(p => p.tenant_id !== null));
+      setAllTenants(getUsers().filter(u => u.role === "tenant"));
+      
+      window.dispatchEvent(new Event("rentportal_properties_updated"));
+      
+      setShowHistoryWizard(false);
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
+  };
+
+  const handleHistInvoiceSubmit = (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+    setSuccessMsg("");
+
+    if (!histInvPropertyId) {
+      setErrorMsg("Wybierz nieruchomość.");
+      return;
+    }
+    if (!histInvTenantId) {
+      setErrorMsg("Wybierz lokatora.");
+      return;
+    }
+    if (!histInvTitle.trim()) {
+      setErrorMsg("Podaj tytuł rachunku.");
+      return;
+    }
+    if (!histInvIssueDate || !histInvDueDate) {
+      setErrorMsg("Podaj datę wystawienia i termin płatności.");
+      return;
+    }
+
+    try {
+      const rent = Number(histInvRent || 0);
+      const admin = Number(histInvAdmin || 0);
+      const utils = Number(histInvUtilities || 0);
+      const total = rent + admin + utils;
+
+      let received = 0;
+      let status = "unpaid";
+      if (histInvStatus === "paid") {
+        received = total;
+        status = "paid";
+      } else if (histInvStatus === "partial") {
+        received = Number(histInvReceived || 0);
+        status = received >= total ? "paid" : "unpaid";
+      }
+
+      addInvoice({
+        property_id: histInvPropertyId,
+        tenant_id: histInvTenantId,
+        landlord_id: landlordId,
+        title: histInvTitle.trim(),
+        amountRent: rent,
+        amountAdmin: admin,
+        amountUtilities: utils,
+        amount: total,
+        receivedPayment: received,
+        status: status,
+        due_date: histInvDueDate,
+        issueDate: histInvIssueDate,
+        paymentDate: histInvStatus !== "unpaid" ? (histInvPaymentDate || histInvIssueDate) : null,
+        notes: (histInvNotes.trim() ? histInvNotes.trim() : "") + " (Kreator Historii)"
+      });
+
+      setSuccessMsg("Pomyślnie dodano historyczny rachunek!");
+      
+      // Reset fields
+      setHistInvPropertyId("");
+      setHistInvTenantId("");
+      setHistInvTitle("");
+      setHistInvRent("");
+      setHistInvAdmin("");
+      setHistInvUtilities("");
+      setHistInvIssueDate("");
+      setHistInvDueDate("");
+      setHistInvStatus("paid");
+      setHistInvReceived("");
+      setHistInvPaymentDate("");
+      setHistInvNotes("");
+
+      // Refresh invoices
+      setInvoices(getInvoices().sort((a, b) => new Date(b.issueDate || b.createdAt) - new Date(a.issueDate || a.createdAt)));
+      setShowHistoryWizard(false);
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
+  };
+
+  const handleHistMeterSubmit = (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+    setSuccessMsg("");
+
+    if (!histMeterPropertyId) {
+      setErrorMsg("Wybierz nieruchomość.");
+      return;
+    }
+    if (!histMeterNumber.trim()) {
+      setErrorMsg("Podaj numer seryjny licznika.");
+      return;
+    }
+    if (!histMeterValue || Number(histMeterValue) < 0) {
+      setErrorMsg("Podaj poprawny, nieujemny stan licznika.");
+      return;
+    }
+    if (!histMeterDate) {
+      setErrorMsg("Podaj datę odczytu.");
+      return;
+    }
+
+    try {
+      addMeterReading({
+        property_id: histMeterPropertyId,
+        meter_type: histMeterType,
+        meter_number: histMeterNumber.trim(),
+        reading_value: Number(histMeterValue),
+        reading_date: histMeterDate,
+        reported_by_id: landlordId,
+        status: "approved"
+      });
+
+      setSuccessMsg("Historyczny odczyt licznika został pomyślnie zapisany!");
+      
+      // Reset fields
+      setHistMeterPropertyId("");
+      setHistMeterType("electricity");
+      setHistMeterNumber("");
+      setHistMeterValue("");
+      setHistMeterDate("");
+
+      // Dispatch update events to recalculate any media bills
+      window.dispatchEvent(new Event("rentportal_meters_updated"));
+      setShowHistoryWizard(false);
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
+  };
+
 
   // Pre-fill fields when property selection shifts
   useEffect(() => {
@@ -480,13 +770,23 @@ export default function LandlordInvoices({ landlordId }) {
           <p className="text-dark-400 text-sm mt-1">Generuj rachunki dla lokatorów i księguj ich płatności.</p>
         </div>
 
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="py-2.5 px-4 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold tracking-wide transition-all flex items-center justify-center gap-2 self-start glass-glow-brand"
-        >
-          <Plus className="w-4 h-4" />
-          Wystaw Rachunek lokatora
-        </button>
+        <div className="flex flex-wrap gap-3 self-start">
+          <button
+            onClick={() => setShowHistoryWizard(true)}
+            className="py-2.5 px-4 bg-dark-900 hover:bg-dark-800 border border-dark-800 hover:border-brand-500 text-white rounded-xl text-xs font-semibold tracking-wide transition-all flex items-center justify-center gap-2 cursor-pointer glass"
+          >
+            <History className="w-4 h-4 text-brand-400" />
+            Uzupełnij Dane Historyczne
+          </button>
+
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="py-2.5 px-4 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold tracking-wide transition-all flex items-center justify-center gap-2 glass-glow-brand cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Wystaw Rachunek lokatora
+          </button>
+        </div>
       </div>
 
       {errorMsg && (
@@ -1321,6 +1621,490 @@ export default function LandlordInvoices({ landlordId }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* History Wizard Modal */}
+      {showHistoryWizard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-950/80 backdrop-blur-md overflow-y-auto animate-fade-in font-sans">
+          <div className="glass max-w-3xl w-full p-6 rounded-2xl border-brand-500/20 space-y-6 shadow-2xl relative">
+            <button 
+              type="button"
+              onClick={() => setShowHistoryWizard(false)}
+              className="absolute top-4 right-4 p-1.5 bg-dark-900 hover:bg-dark-800 text-dark-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            
+            <div className="border-b border-dark-800 pb-3">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2 font-sans">
+                <History className="w-5 h-5 text-brand-400" />
+                Kreator Uzupełniania Danych Historycznych
+              </h3>
+              <p className="text-xxs text-dark-450 mt-1">Poprzedni lokatorzy, archiwalne czynsze, opłacone media i baseline'y liczników.</p>
+            </div>
+
+            {/* Tab Selectors */}
+            <div className="flex border-b border-dark-850 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setWizardTab("tenants")}
+                className={`pb-2.5 px-3 font-semibold transition-all border-b-2 flex items-center gap-1.5 cursor-pointer ${
+                  wizardTab === "tenants" 
+                    ? "border-brand-500 text-white" 
+                    : "border-transparent text-dark-400 hover:text-white"
+                }`}
+              >
+                <UserPlus className="w-4 h-4" />
+                Lokatorzy i Umowy
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => setWizardTab("invoices")}
+                className={`pb-2.5 px-3 font-semibold transition-all border-b-2 flex items-center gap-1.5 cursor-pointer ${
+                  wizardTab === "invoices" 
+                    ? "border-brand-500 text-white" 
+                    : "border-transparent text-dark-400 hover:text-white"
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                Rachunki i Wpłaty
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setWizardTab("meters")}
+                className={`pb-2.5 px-3 font-semibold transition-all border-b-2 flex items-center gap-1.5 cursor-pointer ${
+                  wizardTab === "meters" 
+                    ? "border-brand-500 text-white" 
+                    : "border-transparent text-dark-400 hover:text-white"
+                }`}
+              >
+                <Database className="w-4 h-4" />
+                Odczyty Liczników
+              </button>
+            </div>
+
+            {/* Form Section */}
+            {wizardTab === "tenants" && (
+              <form onSubmit={handleHistTenantSubmit} className="space-y-4 text-xs">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-3 pb-1 border-b border-dark-800/40 text-brand-300">Dane Podstawowe Lokatora</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Imię i nazwisko *</label>
+                        <input
+                          type="text" required placeholder="np. Jan Kowalski"
+                          value={histTenantName} onChange={(e) => setHistTenantName(e.target.value)}
+                          className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Adres E-mail *</label>
+                        <input
+                          type="email" required placeholder="np. jan@lokator.pl"
+                          value={histTenantEmail} onChange={(e) => setHistTenantEmail(e.target.value)}
+                          className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Telefon</label>
+                          <input
+                            type="text" placeholder="+48 600..."
+                            value={histTenantPhone} onChange={(e) => setHistTenantPhone(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Dowód Osobisty</label>
+                          <input
+                            type="text" placeholder="ABC 123..."
+                            value={histTenantIdCard} onChange={(e) => setHistTenantIdCard(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Adres korespondencyjny</label>
+                        <input
+                          type="text" placeholder="Adres zameldowania lokatora"
+                          value={histTenantAddress} onChange={(e) => setHistTenantAddress(e.target.value)}
+                          className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-3 pb-1 border-b border-dark-800/40 text-brand-300">Dane Współlokatora (Opcjonalnie)</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Imię i nazwisko współlokatora</label>
+                        <input
+                          type="text" placeholder="np. Maria Kowalska"
+                          value={histRoommateName} onChange={(e) => setHistRoommateName(e.target.value)}
+                          className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">E-mail współlokatora</label>
+                        <input
+                          type="email" placeholder="np. maria@lokator.pl"
+                          value={histRoommateEmail} onChange={(e) => setHistRoommateEmail(e.target.value)}
+                          className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Telefon</label>
+                          <input
+                            type="text" placeholder="+48 600..."
+                            value={histRoommatePhone} onChange={(e) => setHistRoommatePhone(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Dowód współlokatora</label>
+                          <input
+                            type="text" placeholder="XYZ 987..."
+                            value={histRoommateIdCard} onChange={(e) => setHistRoommateIdCard(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-dark-900/40 p-4 rounded-xl border border-dark-800 space-y-3">
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider text-brand-300">Powiązanie z Nieruchomością i Warunki Umowy</h4>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Wybierz Mieszkanie</label>
+                      <select
+                        value={histPropertyId} onChange={(e) => setHistPropertyId(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                      >
+                        <option value="none">-- Tylko rejestruj lokatora (bez przypisania) --</option>
+                        {allLandlordProperties.map(p => (
+                          <option key={p.id} value={p.id}>{p.title} ({p.address})</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {histPropertyId !== "none" && (
+                      <>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Czynsz Najmu z Umowy (PLN)</label>
+                          <input
+                            type="number" placeholder="np. 2000"
+                            value={histRentAmount} onChange={(e) => setHistRentAmount(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none font-medium"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Dzień Płatności Czynszu</label>
+                          <input
+                            type="number" min="1" max="31" placeholder="10"
+                            value={histPaymentDueDay} onChange={(e) => setHistPaymentDueDay(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none font-medium"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Początek Umowy</label>
+                          <input
+                            type="date"
+                            value={histLeaseStart} onChange={(e) => setHistLeaseStart(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Koniec Umowy</label>
+                          <input
+                            type="date"
+                            value={histLeaseEnd} onChange={(e) => setHistLeaseEnd(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+                  <button
+                    type="button" onClick={() => setShowHistoryWizard(false)}
+                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                  >
+                    Anuluj
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                  >
+                    Zapisz Umowę i Lokatora
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {wizardTab === "invoices" && (
+              <form onSubmit={handleHistInvoiceSubmit} className="space-y-4 text-xs">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Wybierz Nieruchomość *</label>
+                    <select
+                      value={histInvPropertyId} onChange={(e) => setHistInvPropertyId(e.target.value)}
+                      required
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                    >
+                      <option value="" disabled>-- Wybierz Mieszkanie --</option>
+                      {allLandlordProperties.map(p => (
+                        <option key={p.id} value={p.id}>{p.title}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Wybierz Lokatora *</label>
+                    <select
+                      value={histInvTenantId} onChange={(e) => setHistInvTenantId(e.target.value)}
+                      required
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                    >
+                      <option value="" disabled>-- Wybierz Lokatora --</option>
+                      {allTenants.map(t => (
+                        <option key={t.id} value={t.id}>{t.name} ({t.email})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Tytuł Opłaty (Faktury) *</label>
+                    <input
+                      type="text" required placeholder="np. Czynsz historyczny - Styczeń 2026"
+                      value={histInvTitle} onChange={(e) => setHistInvTitle(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Rent z umowy</label>
+                      <input
+                        type="number" placeholder="2500"
+                        value={histInvRent} onChange={(e) => setHistInvRent(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Administracyjne</label>
+                      <input
+                        type="number" placeholder="300"
+                        value={histInvAdmin} onChange={(e) => setHistInvAdmin(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Media / Liczniki</label>
+                      <input
+                        type="number" placeholder="150"
+                        value={histInvUtilities} onChange={(e) => setHistInvUtilities(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none font-medium"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Data Wystawienia *</label>
+                      <input
+                        type="date" required
+                        value={histInvIssueDate} onChange={(e) => setHistInvIssueDate(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Termin Płatności *</label>
+                      <input
+                        type="date" required
+                        value={histInvDueDate} onChange={(e) => setHistInvDueDate(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-brand-500/5 p-3.5 rounded-xl border border-brand-500/20 flex flex-col justify-center">
+                    <span className="text-[10px] font-semibold text-brand-400 uppercase tracking-wider block">Sumaryczna kwota należności</span>
+                    <span className="text-lg font-bold text-white font-mono">
+                      {(Number(histInvRent) + Number(histInvAdmin) + Number(histInvUtilities) || 0).toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="bg-dark-900/40 p-4 rounded-xl border border-dark-800 space-y-4">
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider text-brand-300">Status Wpłaty i Księgowanie Płatności</h4>
+                  
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Status Płatności</label>
+                      <select
+                        value={histInvStatus} onChange={(e) => setHistInvStatus(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                      >
+                        <option value="paid">🟢 Zapłacona w całości</option>
+                        <option value="partial">🟡 Zapłacona częściowo</option>
+                        <option value="unpaid">🔴 Niezapłacona</option>
+                      </select>
+                    </div>
+
+                    {histInvStatus !== "unpaid" && (
+                      <>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">
+                            {histInvStatus === "paid" ? "Otrzymana kwota (Tylko do odczytu)" : "Faktycznie otrzymana kwota *"}
+                          </label>
+                          <input
+                            type="number"
+                            required
+                            disabled={histInvStatus === "paid"}
+                            value={histInvStatus === "paid" ? (Number(histInvRent) + Number(histInvAdmin) + Number(histInvUtilities) || "") : histInvReceived}
+                            onChange={(e) => setHistInvReceived(e.target.value)}
+                            placeholder="np. 1500"
+                            className={`w-full border rounded-xl px-3 py-1.5 font-medium focus:outline-none ${
+                              histInvStatus === "paid"
+                                ? "bg-dark-950 border-dark-850 text-dark-500 cursor-not-allowed select-none"
+                                : "bg-dark-900 border-dark-800 text-white focus:border-brand-500"
+                            }`}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Rzeczywista Data Wpłaty *</label>
+                          <input
+                            type="date" required
+                            value={histInvPaymentDate} onChange={(e) => setHistInvPaymentDate(e.target.value)}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Notatki historyczne / komentarze</label>
+                  <input
+                    type="text" placeholder="np. Zaksięgowano przelew tradycyjny wsteczny."
+                    value={histInvNotes} onChange={(e) => setHistInvNotes(e.target.value)}
+                    className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+                  <button
+                    type="button" onClick={() => setShowHistoryWizard(false)}
+                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                  >
+                    Anuluj
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                  >
+                    Zapisz Fakturę Historyczną
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {wizardTab === "meters" && (
+              <form onSubmit={handleHistMeterSubmit} className="space-y-4 text-xs">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Nieruchomość *</label>
+                    <select
+                      value={histMeterPropertyId} onChange={(e) => setHistMeterPropertyId(e.target.value)}
+                      required
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                    >
+                      <option value="" disabled>-- Wybierz Mieszkanie --</option>
+                      {allLandlordProperties.map(p => (
+                        <option key={p.id} value={p.id}>{p.title}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Typ Licznika / Medium *</label>
+                    <select
+                      value={histMeterType} onChange={(e) => setHistMeterType(e.target.value)}
+                      required
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                    >
+                      <option value="electricity">💡 Energia elektryczna (prąd)</option>
+                      <option value="gas">⛽ Gaz ziemny</option>
+                      <option value="water_cold">💧 Zimna woda</option>
+                      <option value="water_hot">🔥 Ciepła woda</option>
+                      <option value="heating">♨️ Ogrzewanie (C.O.)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Numer Seryjny Licznika *</label>
+                    <input
+                      type="text" required placeholder="np. L-EL-9901"
+                      value={histMeterNumber} onChange={(e) => setHistMeterNumber(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Stan Licznika *</label>
+                      <input
+                        type="number" step="any" required placeholder="np. 12450.5"
+                        value={histMeterValue} onChange={(e) => setHistMeterValue(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Data Odczytu *</label>
+                      <input
+                        type="date" required
+                        value={histMeterDate} onChange={(e) => setHistMeterDate(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-green-500/5 border border-green-500/20 text-green-400 p-3 rounded-xl flex items-start gap-2">
+                  <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    Ten odczyt zostanie automatycznie zapisany jako <strong>Zatwierdzony</strong>. Stworzy on historyczny punkt odniesienia (baseline) dla dalszych wyliczeń zużycia mediów.
+                  </span>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+                  <button
+                    type="button" onClick={() => setShowHistoryWizard(false)}
+                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                  >
+                    Anuluj
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                  >
+                    Zapisz Odczyt Historyczny
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

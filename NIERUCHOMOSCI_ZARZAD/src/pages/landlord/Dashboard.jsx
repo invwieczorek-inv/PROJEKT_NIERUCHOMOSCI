@@ -9,6 +9,7 @@ import LandlordProperties from "./Properties";
 import LandlordInvoices from "./Invoices";
 import LandlordMeters from "./Meters";
 import LandlordMessages from "./Messages";
+import LandlordArchive from "./Archive";
 import { 
   Building, 
   CreditCard, 
@@ -21,7 +22,8 @@ import {
   ArrowRight,
   CheckCircle,
   X,
-  Calendar
+  Calendar,
+  History
 } from "lucide-react";
 
 export default function LandlordDashboard({ activeUser }) {
@@ -159,6 +161,8 @@ export default function LandlordDashboard({ activeUser }) {
         return <LandlordMeters landlordId={activeUser.id} />;
       case "messages":
         return <LandlordMessages landlordId={activeUser.id} />;
+      case "archive":
+        return <LandlordArchive landlordId={activeUser.id} />;
       case "pulpit":
       default:
         return renderDashboardSummary();
@@ -474,6 +478,14 @@ export default function LandlordDashboard({ activeUser }) {
             }`}
           >
             Wiadomości
+          </button>
+          <button
+            onClick={() => setActiveTab("archive")}
+            className={`py-2 px-4 rounded-xl text-xs font-semibold transition-all ${
+              activeTab === "archive" ? "bg-brand-600 text-white shadow-md" : "text-dark-300 hover:bg-dark-800 hover:text-white"
+            }`}
+          >
+            Archiwum
           </button>
         </nav>
       </div>

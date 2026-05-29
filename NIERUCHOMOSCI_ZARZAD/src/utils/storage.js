@@ -231,7 +231,7 @@ export const getUserById = (id) => {
 };
 
 export const getTenants = () => {
-  return getUsers().filter(u => u.role === "tenant");
+  return getUsers().filter(u => u.role === "tenant" && !u.isArchived);
 };
 
 export const addTenant = (tenantData) => {
@@ -762,6 +762,91 @@ export const getMediaCostForPropertyAndMonth = (propertyId, monthStr) => {
   return approvedMetersInMonth.reduce((sum, item) => {
     return sum + calculateReadingCostVal(item, allMeters);
   }, 0);
+};
+
+export const archiveTenant = (propertyId) => {
+  const properties = getProperties();
+  const users = getItems(KEYS.USERS);
+
+  const propIndex = properties.findIndex(p => p.id === propertyId);
+  if (propIndex === -1) throw new Error("Nieruchomość nie istnieje.");
+  
+  const tenantId = properties[propIndex].tenant_id;
+  if (!tenantId) throw new Error("Mieszkanie nie ma aktywnego lokatora do zarchiwizowania.");
+
+  const userIndex = users.findIndex(u => u.id === tenantId);
+  if (userIndex === -1) throw new Error("Lokator nie istnieje w bazie danych.");
+
+  const prop = properties[propIndex];
+  const user = users[userIndex];
+
+  // Append history record
+  const leaseHistoryEntry = {
+    propertyId: prop.id,
+    propertyTitle: prop.title,
+    address: prop.address,
+    city: prop.city,
+    rentAmount: prop.rentAmount,
+    depositAmount: prop.depositAmount,
+    leaseStart: prop.leaseStart,
+    leaseEnd: prop.leaseEnd,
+    archivedAt: new Date().toISOString()
+  };
+
+  const currentHistory = user.leaseHistory || [];
+  user.leaseHistory = [...currentHistory, leaseHistoryEntry];
+  user.isArchived = true;
+  user.property_id = null;
+
+  // Unlink property
+  properties[propIndex] = {
+    ...prop,
+    tenant_id: null,
+    leaseStart: null,
+    leaseEnd: null,
+    paymentDueDay: null
+  };
+
+  saveItems(KEYS.PROPERTIES, properties);
+  saveItems(KEYS.USERS, users);
+
+  // Dispatch events to force UI re-renders
+  window.dispatchEvent(new Event("rentportal_properties_updated"));
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+
+  return { property: properties[propIndex], tenant: users[userIndex] };
+};
+
+export const addTenantNote = (tenantId, title, content) => {
+  const users = getItems(KEYS.USERS);
+  const userIndex = users.findIndex(u => u.id === tenantId);
+  if (userIndex === -1) throw new Error("Lokator nie istnieje w bazie.");
+
+  const newNote = {
+    id: `note-${Date.now()}`,
+    title: title.trim(),
+    content: content.trim(),
+    createdAt: new Date().toISOString()
+  };
+
+  const currentNotes = users[userIndex].notes || [];
+  users[userIndex].notes = [...currentNotes, newNote];
+
+  saveItems(KEYS.USERS, users);
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+  return newNote;
+};
+
+export const deleteTenantNote = (tenantId, noteId) => {
+  const users = getItems(KEYS.USERS);
+  const userIndex = users.findIndex(u => u.id === tenantId);
+  if (userIndex === -1) throw new Error("Lokator nie istnieje w bazie.");
+
+  const currentNotes = users[userIndex].notes || [];
+  users[userIndex].notes = currentNotes.filter(n => n.id !== noteId);
+
+  saveItems(KEYS.USERS, users);
+  window.dispatchEvent(new Event("rentportal_users_updated"));
 };
 
 

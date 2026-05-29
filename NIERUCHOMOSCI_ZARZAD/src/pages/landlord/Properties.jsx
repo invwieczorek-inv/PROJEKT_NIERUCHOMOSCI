@@ -8,7 +8,10 @@ import {
   addDocument,
   deleteDocument,
   openDocumentFile,
-  addTenant
+  addTenant,
+  archiveTenant,
+  addTenantNote,
+  deleteTenantNote
 } from "../../utils/storage";
 import { 
   Home, 
@@ -22,7 +25,10 @@ import {
   Info, 
   FileText, 
   UploadCloud, 
-  Eye 
+  Eye,
+  Search,
+  PlusCircle,
+  Clock
 } from "lucide-react";
 
 export default function LandlordProperties({ landlordId }) {
@@ -201,15 +207,18 @@ export default function LandlordProperties({ landlordId }) {
   };
 
   const handleRemoveTenant = (propertyId) => {
-    if (!window.confirm("Czy na pewno chcesz usunąć lokatora z tej nieruchomości? Spowoduje to zwolnienie lokalu.")) return;
+    if (!window.confirm("Czy na pewno chcesz zakończyć najem i przenieść lokatora do archiwum? Spowoduje to zwolnienie lokalu i zachowanie pełnej historii najmu.")) return;
     
     setErrorMsg("");
     setSuccessMsg("");
     try {
-      updatePropertyTenant(propertyId, null, null, null);
-      setSuccessMsg("Lokator został pomyślnie usunięty. Lokal jest teraz wolny.");
+      archiveTenant(propertyId);
+      setSuccessMsg("Lokator został pomyślnie przeniesiony do archiwum! Lokal jest teraz wolny.");
       const landlordProps = getPropertiesByLandlord(landlordId);
       setProperties(landlordProps);
+      
+      // Update local tenant list
+      setTenants(getTenants());
     } catch (err) {
       setErrorMsg(err.message);
     }
@@ -783,6 +792,8 @@ export default function LandlordProperties({ landlordId }) {
 
                       </div>
 
+                      <TenantNotesSection tenant={tenant} />
+
                     </div>
                     
                     <button
@@ -817,6 +828,143 @@ export default function LandlordProperties({ landlordId }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function TenantNotesSection({ tenant }) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [topic, setTopic] = useState("");
+  const [content, setContent] = useState("");
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [localNotes, setLocalNotes] = useState(tenant.notes || []);
+
+  useEffect(() => {
+    setLocalNotes(tenant.notes || []);
+  }, [tenant.notes]);
+
+  const handleAddNote = (e) => {
+    e.preventDefault();
+    if (!topic.trim() || !content.trim()) return;
+    try {
+      const newNote = addTenantNote(tenant.id, topic.trim(), content.trim());
+      setLocalNotes(prev => [...prev, newNote]);
+      setTopic("");
+      setContent("");
+      setShowAddForm(false);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteNote = (noteId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć tę notatkę?")) return;
+    try {
+      deleteTenantNote(tenant.id, noteId);
+      setLocalNotes(prev => prev.filter(n => n.id !== noteId));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const filteredNotes = localNotes.filter(n => 
+    n.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    n.content.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <div className="mt-4 pt-3 border-t border-dark-800/80 space-y-3 font-sans">
+      <div className="flex items-center justify-between">
+        <span className="text-dark-500 text-[10px] block font-bold uppercase tracking-wider text-dark-400">
+          📝 Rejestr Ustaleń i Notatek
+        </span>
+        <button
+          type="button"
+          onClick={() => setShowAddForm(!showAddForm)}
+          className="text-brand-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 bg-brand-500/10 px-2 py-0.5 rounded transition-all cursor-pointer"
+        >
+          {showAddForm ? "Anuluj" : "+ Dodaj notatkę"}
+        </button>
+      </div>
+
+      {showAddForm && (
+        <form onSubmit={handleAddNote} className="space-y-2 bg-dark-950/80 p-2.5 rounded-xl border border-brand-500/20 text-xxs animate-fade-in">
+          <div>
+            <label className="block text-[8px] font-bold text-dark-400 uppercase mb-1">Temat ustaleń *</label>
+            <input
+              type="text"
+              required
+              placeholder="np. Ustalenia dot. kaucji"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              className="w-full bg-dark-900 border border-dark-800 rounded px-2 py-1 text-white focus:border-brand-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-[8px] font-bold text-dark-400 uppercase mb-1">Treść notatki *</label>
+            <textarea
+              required
+              rows="2"
+              placeholder="Wpisz treść ustaleń z lokatorem..."
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              className="w-full bg-dark-900 border border-dark-800 rounded px-2 py-1 text-white focus:border-brand-500 focus:outline-none"
+            />
+          </div>
+          <button
+            type="submit"
+            className="w-full py-1 bg-brand-600 hover:bg-brand-500 text-white rounded text-[10px] font-bold transition-all cursor-pointer"
+          >
+            Zapisz notatkę
+          </button>
+        </form>
+      )}
+
+      {/* Search Input if there are notes */}
+      {localNotes.length > 0 && (
+        <div className="relative">
+          <Search className="absolute left-2 top-2 w-3 h-3 text-dark-500" />
+          <input
+            type="text"
+            placeholder="Szukaj w notatkach..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-dark-950 border border-dark-800 rounded-lg pl-7 pr-3 py-1 text-[10px] text-white focus:border-brand-500 focus:outline-none placeholder-dark-500"
+          />
+        </div>
+      )}
+
+      {/* Notes List */}
+      <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+        {filteredNotes.length === 0 ? (
+          <p className="text-[9px] text-dark-500 text-center py-2 italic">
+            {localNotes.length === 0 ? "Brak sporządzonych notatek." : "Brak pasujących notatek."}
+          </p>
+        ) : (
+          filteredNotes.map(n => (
+            <div key={n.id} className="p-2 bg-dark-950/40 rounded-lg border border-dark-850 flex flex-col gap-1 relative group hover:border-dark-750 transition-all text-[10px]">
+              <div className="flex items-center justify-between gap-2 border-b border-dark-850 pb-1">
+                <span className="font-bold text-white truncate max-w-[70%]" title={n.title}>
+                  📌 {n.title}
+                </span>
+                <span className="text-[8px] text-dark-500 font-mono flex items-center gap-0.5">
+                  <Clock className="w-2.5 h-2.5 text-brand-400" />
+                  {new Date(n.createdAt).toLocaleDateString('pl-PL')}
+                </span>
+              </div>
+              <p className="text-dark-300 text-[9px] leading-relaxed whitespace-pre-wrap">{n.content}</p>
+              <button
+                type="button"
+                onClick={() => handleDeleteNote(n.id)}
+                className="absolute top-1.5 right-1.5 p-0.5 text-dark-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all cursor-pointer rounded"
+                title="Usuń notatkę"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

@@ -258,7 +258,29 @@ export const addTenant = (tenantData) => {
 // ==========================================
 // PROPERTIES
 // ==========================================
-export const getProperties = () => getItems(KEYS.PROPERTIES);
+export const getProperties = () => {
+  const properties = getItems(KEYS.PROPERTIES);
+  let updated = false;
+  const nextProps = properties.map(p => {
+    let isChanged = false;
+    if (p.id === "m1" && p.area === undefined) {
+      p.area = 54.2;
+      p.landRegister = "KR1P/00084712/3";
+      isChanged = true;
+    }
+    if (p.id === "m2" && p.area === undefined) {
+      p.area = 28.0;
+      p.landRegister = "KR1P/00092304/9";
+      isChanged = true;
+    }
+    if (isChanged) updated = true;
+    return p;
+  });
+  if (updated) {
+    saveItems(KEYS.PROPERTIES, nextProps);
+  }
+  return nextProps;
+};
 
 export const getPropertyById = (id) => {
   return getProperties().find(p => p.id === id) || null;
@@ -321,8 +343,50 @@ export const updatePropertyTenant = (propertyId, tenantId, leaseStart = null, le
 
   saveItems(KEYS.PROPERTIES, properties);
   saveItems(KEYS.USERS, updatedUsers);
+  
+  window.dispatchEvent(new Event("rentportal_properties_updated"));
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+  
   return properties[propIndex];
 };
+
+export const updateProperty = (propertyId, propertyData) => {
+  const properties = getProperties();
+  const propIndex = properties.findIndex(p => p.id === propertyId);
+  if (propIndex === -1) throw new Error("Nieruchomość nie istnieje.");
+
+  properties[propIndex] = {
+    ...properties[propIndex],
+    ...propertyData
+  };
+
+  saveItems(KEYS.PROPERTIES, properties);
+  window.dispatchEvent(new Event("rentportal_properties_updated"));
+  return properties[propIndex];
+};
+
+export const deleteProperty = (propertyId) => {
+  const properties = getProperties();
+  const propIndex = properties.findIndex(p => p.id === propertyId);
+  if (propIndex === -1) throw new Error("Nieruchomość nie istnieje.");
+
+  const tenantId = properties[propIndex].tenant_id;
+  if (tenantId) {
+    const users = getItems(KEYS.USERS);
+    const userIndex = users.findIndex(u => u.id === tenantId);
+    if (userIndex !== -1) {
+      users[userIndex].property_id = null;
+      saveItems(KEYS.USERS, users);
+    }
+  }
+
+  const updatedProps = properties.filter(p => p.id !== propertyId);
+  saveItems(KEYS.PROPERTIES, updatedProps);
+
+  window.dispatchEvent(new Event("rentportal_properties_updated"));
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+};
+
 
 // ==========================================
 // INVOICES

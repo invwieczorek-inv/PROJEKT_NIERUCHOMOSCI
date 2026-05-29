@@ -11,7 +11,9 @@ import {
   addTenant,
   archiveTenant,
   addTenantNote,
-  deleteTenantNote
+  deleteTenantNote,
+  updateProperty,
+  deleteProperty
 } from "../../utils/storage";
 import { 
   Home, 
@@ -28,7 +30,8 @@ import {
   Eye,
   Search,
   PlusCircle,
-  Clock
+  Clock,
+  Edit
 } from "lucide-react";
 
 export default function LandlordProperties({ landlordId }) {
@@ -44,6 +47,19 @@ export default function LandlordProperties({ landlordId }) {
   const [description, setDescription] = useState("");
   const [rentAmount, setRentAmount] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
+  const [area, setArea] = useState("");
+  const [landRegister, setLandRegister] = useState("");
+
+  // Edit property fields & state
+  const [editPropertyId, setEditPropertyId] = useState(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editAddress, setEditAddress] = useState("");
+  const [editCity, setEditCity] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editRentAmount, setEditRentAmount] = useState("");
+  const [editDepositAmount, setEditDepositAmount] = useState("");
+  const [editArea, setEditArea] = useState("");
+  const [editLandRegister, setEditLandRegister] = useState("");
 
   // Assign tenant fields
   const [activePropertyId, setActivePropertyId] = useState(null);
@@ -101,6 +117,8 @@ export default function LandlordProperties({ landlordId }) {
         description: description.trim(),
         rentAmount: Number(rentAmount),
         depositAmount: Number(depositAmount),
+        area: area ? Number(area) : null,
+        landRegister: landRegister.trim() || null,
         leaseStart: null,
         leaseEnd: null
       });
@@ -112,9 +130,88 @@ export default function LandlordProperties({ landlordId }) {
       setDescription("");
       setRentAmount("");
       setDepositAmount("");
+      setArea("");
+      setLandRegister("");
       setShowAddForm(false);
       
       // Refresh properties list
+      const landlordProps = getPropertiesByLandlord(landlordId);
+      setProperties(landlordProps);
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
+  };
+
+  const handleStartEditProperty = (prop) => {
+    setEditPropertyId(prop.id);
+    setEditTitle(prop.title || "");
+    setEditAddress(prop.address || "");
+    setEditCity(prop.city || "");
+    setEditDescription(prop.description || "");
+    setEditRentAmount(prop.rentAmount || "");
+    setEditDepositAmount(prop.depositAmount || "");
+    setEditArea(prop.area || "");
+    setEditLandRegister(prop.landRegister || "");
+    
+    // Clear other forms/notifications
+    setShowAddForm(false);
+    setActivePropertyId(null);
+    setErrorMsg("");
+    setSuccessMsg("");
+  };
+
+  const handleEditPropertySubmit = (e) => {
+    e.preventDefault();
+    setErrorMsg("");
+    setSuccessMsg("");
+
+    if (!editTitle.trim() || !editAddress.trim() || !editCity.trim() || !editRentAmount || !editDepositAmount) {
+      setErrorMsg("Wszystkie pola oznaczone gwiazdką są wymagane.");
+      return;
+    }
+
+    try {
+      updateProperty(editPropertyId, {
+        title: editTitle.trim(),
+        address: editAddress.trim(),
+        city: editCity.trim(),
+        description: editDescription.trim(),
+        rentAmount: Number(editRentAmount),
+        depositAmount: Number(editDepositAmount),
+        area: editArea ? Number(editArea) : null,
+        landRegister: editLandRegister.trim() || null
+      });
+
+      setSuccessMsg("Dane nieruchomości zostały pomyślnie zaktualizowane!");
+      setEditPropertyId(null);
+
+      // Refresh properties list
+      const landlordProps = getPropertiesByLandlord(landlordId);
+      setProperties(landlordProps);
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
+  };
+
+  const handleDeletePropertyClick = (propertyId) => {
+    const prop = properties.find(p => p.id === propertyId);
+    if (!prop) return;
+
+    let confirmMsg = `Czy na pewno chcesz trwale usunąć nieruchomość "${prop.title}" (np. w przypadku sprzedaży)?\n`;
+    if (prop.tenant_id) {
+      confirmMsg += `\n⚠️ UWAGA: Mieszkanie ma aktywnego lokatora! Lokator zostanie automatycznie odłączony od lokalu.`;
+    }
+    
+    if (!window.confirm(confirmMsg)) return;
+
+    setErrorMsg("");
+    setSuccessMsg("");
+
+    try {
+      deleteProperty(propertyId);
+      setSuccessMsg("Nieruchomość została pomyślnie usunięta z bazy danych!");
+
+      // Refresh list
       const landlordProps = getPropertiesByLandlord(landlordId);
       setProperties(landlordProps);
     } catch (err) {
@@ -382,6 +479,22 @@ export default function LandlordProperties({ landlordId }) {
                 className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
               />
             </div>
+            <div>
+              <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5">Powierzchnia mieszkania (m²)</label>
+              <input 
+                type="number" step="0.1" placeholder="np. 48.5" 
+                value={area} onChange={(e) => setArea(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5">Nr księgi wieczystej</label>
+              <input 
+                type="text" placeholder="np. KR1P/00012345/1" 
+                value={landRegister} onChange={(e) => setLandRegister(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
             <div className="md:col-span-2">
               <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5">Krótki opis / wyposażenie</label>
               <textarea 
@@ -402,6 +515,93 @@ export default function LandlordProperties({ landlordId }) {
                 className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand"
               >
                 Zapisz Mieszkanie
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Edit Property Form */}
+      {editPropertyId && (
+        <div className="glass p-6 rounded-2xl border-brand-500/20 bg-brand-500/5">
+          <h3 className="text-lg font-semibold text-white mb-4">Edycja Nieruchomości</h3>
+          <form onSubmit={handleEditPropertySubmit} className="grid gap-4 md:grid-cols-2 text-xs">
+            <div>
+              <label className="block text-[10px] font-bold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Tytuł ogłoszenia / Nazwa lokalu *</label>
+              <input 
+                type="text" required placeholder="np. Apartament Jasny, Mickiewicza 4/12" 
+                value={editTitle} onChange={(e) => setEditTitle(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Miasto *</label>
+              <input 
+                type="text" required placeholder="np. Kraków" 
+                value={editCity} onChange={(e) => setEditCity(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-[10px] font-bold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Adres nieruchomości *</label>
+              <input 
+                type="text" required placeholder="np. ul. Mickiewicza 4/12" 
+                value={editAddress} onChange={(e) => setEditAddress(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Miesięczny czynsz (PLN) *</label>
+              <input 
+                type="number" required placeholder="np. 2500" 
+                value={editRentAmount} onChange={(e) => setEditRentAmount(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Kaucja zwrotna (PLN) *</label>
+              <input 
+                type="number" required placeholder="np. 2500" 
+                value={editDepositAmount} onChange={(e) => setEditDepositAmount(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Powierzchnia mieszkania (m²)</label>
+              <input 
+                type="number" step="0.1" placeholder="np. 48.5" 
+                value={editArea} onChange={(e) => setEditArea(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Nr księgi wieczystej</label>
+              <input 
+                type="text" placeholder="np. KR1P/00012345/1" 
+                value={editLandRegister} onChange={(e) => setEditLandRegister(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-[10px] font-bold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Krótki opis / wyposażenie</label>
+              <textarea 
+                placeholder="np. Standard wykończenia premium, zmywarka, pralka." 
+                value={editDescription} onChange={(e) => setEditDescription(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none h-20 resize-none"
+              />
+            </div>
+            <div className="md:col-span-2 flex justify-end gap-3">
+              <button 
+                type="button" onClick={() => setEditPropertyId(null)}
+                className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800"
+              >
+                Anuluj
+              </button>
+              <button 
+                type="submit" 
+                className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand"
+              >
+                Zapisz Zmiany
               </button>
             </div>
           </form>
@@ -617,11 +817,29 @@ export default function LandlordProperties({ landlordId }) {
                   <span className="p-2 rounded-xl bg-dark-900 border border-dark-800 text-brand-400">
                     <Home className="w-5 h-5" />
                   </span>
-                  <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
-                    p.tenant_id ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'
-                  }`}>
-                    {p.tenant_id ? 'Wynajęte' : 'Wolne'}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => handleStartEditProperty(p)}
+                      className="p-1.5 bg-dark-900 hover:bg-dark-800 border border-dark-800 hover:border-brand-500/40 text-brand-400 hover:text-brand-300 rounded-lg transition-colors cursor-pointer"
+                      title="Edytuj Nieruchomość"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeletePropertyClick(p.id)}
+                      className="p-1.5 bg-dark-900 hover:bg-red-500/10 border border-dark-800 hover:border-red-500/30 text-dark-400 hover:text-red-400 rounded-lg transition-colors cursor-pointer"
+                      title="Usuń Nieruchomość"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-lg border ${
+                      p.tenant_id 
+                        ? 'bg-green-500/10 border-green-500/20 text-green-400' 
+                        : 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400'
+                    }`}>
+                      {p.tenant_id ? 'Wynajęte' : 'Wolne'}
+                    </span>
+                  </div>
                 </div>
 
                 <h3 className="text-lg font-bold text-white font-sans mt-2">{p.title}</h3>
@@ -635,14 +853,24 @@ export default function LandlordProperties({ landlordId }) {
                   <p className="text-xs text-dark-400 line-clamp-2 mt-1">{p.description}</p>
                 )}
 
-                <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-dark-800 text-xs">
+                <div className="grid grid-cols-2 gap-x-2 gap-y-3 mt-3 pt-3 border-t border-dark-800 text-xs">
                   <div>
-                    <span className="text-dark-500 text-xxs uppercase block tracking-wider font-semibold">Czynsz</span>
-                    <span className="font-bold text-white">{p.rentAmount} PLN</span>
+                    <span className="text-dark-500 text-xxs uppercase block tracking-wider font-bold">Czynsz</span>
+                    <span className="font-bold text-white mt-0.5 block">{p.rentAmount} PLN</span>
                   </div>
                   <div>
-                    <span className="text-dark-500 text-xxs uppercase block tracking-wider font-semibold">Kaucja</span>
-                    <span className="font-bold text-white">{p.depositAmount} PLN</span>
+                    <span className="text-dark-500 text-xxs uppercase block tracking-wider font-bold">Kaucja</span>
+                    <span className="font-bold text-white mt-0.5 block">{p.depositAmount} PLN</span>
+                  </div>
+                  <div>
+                    <span className="text-dark-500 text-xxs uppercase block tracking-wider font-bold">Powierzchnia</span>
+                    <span className="font-bold text-brand-300 mt-0.5 block">{p.area ? `${p.area} m²` : "brak danych"}</span>
+                  </div>
+                  <div>
+                    <span className="text-dark-500 text-xxs uppercase block tracking-wider font-bold">Księga Wieczysta</span>
+                    <span className="font-mono font-semibold text-brand-300 text-[10px] truncate mt-0.5 block" title={p.landRegister || "brak danych"}>
+                      {p.landRegister || "brak danych"}
+                    </span>
                   </div>
                 </div>
               </div>

@@ -39,6 +39,8 @@ export const MOCK_PROPERTIES = [
     description: "Komfortowe mieszkanie w dogodnej lokalizacji. Ogrzewanie miejskie.",
     rentAmount: 2500,
     depositAmount: 2500,
+    area: 54.2,
+    landRegister: "KR1P/00084712/3",
     leaseStart: "2026-01-01",
     leaseEnd: "2026-12-31",
     paymentDueDay: 10,
@@ -54,6 +56,8 @@ export const MOCK_PROPERTIES = [
     description: "Słoneczna kawalerka w centrum miasta.",
     rentAmount: 1800,
     depositAmount: 1800,
+    area: 28.0,
+    landRegister: "KR1P/00092304/9",
     leaseStart: null,
     leaseEnd: null,
     createdAt: "2026-02-15T09:00:00.000Z"

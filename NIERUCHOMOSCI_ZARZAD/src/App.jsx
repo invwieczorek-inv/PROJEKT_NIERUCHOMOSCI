@@ -21,12 +21,32 @@ export default function App() {
     setAllUsers(getUsers());
 
     const handleUsersUpdate = () => {
-      setAllUsers(getUsers());
+      const latestUsers = getUsers();
+      setAllUsers(latestUsers);
+      
+      // Auto-switch back to Landlord if the active simulated tenant has been archived/unleased
+      const active = getActiveUser();
+      if (active && active.role === "tenant") {
+        const latestUserObj = latestUsers.find(u => u.id === active.id);
+        if (!latestUserObj || latestUserObj.isArchived || !latestUserObj.property_id) {
+          const landlord = latestUsers.find(u => u.role === "landlord");
+          if (landlord) {
+            switchSessionUser(landlord.id);
+            setCurrentUser(landlord);
+          }
+        }
+      }
+    };
+
+    const handleSessionUpdate = () => {
+      setCurrentUser(getActiveUser());
     };
 
     window.addEventListener("rentportal_users_updated", handleUsersUpdate);
+    window.addEventListener("rentportal_session_updated", handleSessionUpdate);
     return () => {
       window.removeEventListener("rentportal_users_updated", handleUsersUpdate);
+      window.removeEventListener("rentportal_session_updated", handleSessionUpdate);
     };
   }, []);
 
@@ -92,7 +112,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <span className="text-dark-400">Przełącz Aktywnego Użytkownika:</span>
             <div className="flex gap-1">
-              {allUsers.map(user => {
+              {allUsers.filter(user => !user.isArchived && (user.role !== "tenant" || user.property_id)).map(user => {
                 const isActive = currentUser.id === user.id;
                 return (
                   <button

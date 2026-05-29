@@ -849,4 +849,32 @@ export const deleteTenantNote = (tenantId, noteId) => {
   window.dispatchEvent(new Event("rentportal_users_updated"));
 };
 
+export const updateUserProfile = (userId, profileData) => {
+  const users = getItems(KEYS.USERS);
+  const index = users.findIndex(u => u.id === userId);
+  if (index === -1) throw new Error("Użytkownik nie istnieje.");
+
+  users[index] = {
+    ...users[index],
+    ...profileData
+  };
+
+  saveItems(KEYS.USERS, users);
+
+  // If this was the current session user, update session as well
+  const sessionData = localStorage.getItem(KEYS.SESSION);
+  if (sessionData) {
+    const sessionUser = JSON.parse(sessionData);
+    if (sessionUser.id === userId) {
+      localStorage.setItem(KEYS.SESSION, JSON.stringify(users[index]));
+    }
+  }
+
+  // Dispatch both events to refresh all components
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+  window.dispatchEvent(new Event("rentportal_session_updated"));
+  
+  return users[index];
+};
+
 

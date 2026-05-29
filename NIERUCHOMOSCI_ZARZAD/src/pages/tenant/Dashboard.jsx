@@ -33,7 +33,7 @@ export default function TenantDashboard({ activeUser }) {
   const [recentReadings, setRecentReadings] = useState([]);
   const [documents, setDocuments] = useState([]);
 
-  useEffect(() => {
+  const refreshTenantData = () => {
     if (activeUser) {
       const props = getPropertiesByTenant(activeUser.id);
       if (props.length > 0) {
@@ -57,8 +57,28 @@ export default function TenantDashboard({ activeUser }) {
         // Get active documents
         const docs = getDocumentsForTenant(activeUser.id);
         setDocuments(docs);
+      } else {
+        setProperty(null);
+        setLandlord(null);
+        setUnpaidCount(0);
+        setTotalDue(0);
+        setRecentReadings([]);
+        setDocuments([]);
       }
     }
+  };
+
+  useEffect(() => {
+    refreshTenantData();
+
+    const handleUsersUpdate = () => {
+      refreshTenantData();
+    };
+
+    window.addEventListener("rentportal_users_updated", handleUsersUpdate);
+    return () => {
+      window.removeEventListener("rentportal_users_updated", handleUsersUpdate);
+    };
   }, [activeUser, activeTab]);
 
   const renderContent = () => {
@@ -316,6 +336,26 @@ export default function TenantDashboard({ activeUser }) {
       </div>
     );
   };
+
+  if (!property) {
+    return (
+      <div className="max-w-md mx-auto md:max-w-4xl px-2 py-4 space-y-6">
+        <div className="glass p-8 text-center rounded-2xl border-yellow-500/10 glass-glow-brand relative overflow-hidden">
+          <div className="absolute right-4 top-4 text-yellow-500/5 pointer-events-none">
+            <Home className="w-32 h-32 stroke-[1.5]" />
+          </div>
+          <Home className="w-16 h-16 text-yellow-500 mx-auto mb-4 animate-bounce" />
+          <h3 className="text-xl font-extrabold text-white mb-2">Brak Aktywnego Najmu</h3>
+          <p className="text-dark-300 text-xs max-w-sm mx-auto leading-relaxed mb-4">
+            Cześć, <strong className="text-brand-300">{activeUser.name}</strong>! Nie posiadasz obecnie aktywnego najmu lokalu w naszym portalu. Twój najem mógł zostać zarchiwizowany przez zarządcę po zakończeniu okresu umowy.
+          </p>
+          <div className="bg-dark-900/60 p-3 rounded-xl border border-dark-800 text-[10px] text-dark-400 max-w-sm mx-auto">
+            ℹ️ Jeśli uważasz, że to błąd, skontaktuj się bezpośrednio ze swoim zarządcą lub administratorem RentPortal.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-md mx-auto md:max-w-4xl px-2 py-4 space-y-6">

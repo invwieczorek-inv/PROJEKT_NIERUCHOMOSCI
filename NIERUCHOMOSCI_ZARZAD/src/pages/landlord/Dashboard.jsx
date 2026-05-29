@@ -3,7 +3,8 @@ import {
   getPropertiesByLandlord, 
   getInvoices, 
   getMeters,
-  getUserById
+  getUserById,
+  updateUserProfile
 } from "../../utils/storage";
 import LandlordProperties from "./Properties";
 import LandlordInvoices from "./Invoices";
@@ -17,6 +18,7 @@ import {
   MessageSquare, 
   Activity, 
   UserCheck, 
+  User,
   Clock, 
   Sparkles, 
   ArrowRight,
@@ -44,6 +46,35 @@ export default function LandlordDashboard({ activeUser }) {
   const [adminFeesValues, setAdminFeesValues] = useState({});
   const [occupiedProperties, setOccupiedProperties] = useState([]);
   const [successToast, setSuccessToast] = useState("");
+
+  // Landlord Profile States
+  const [profileName, setProfileName] = useState(activeUser.name || "");
+  const [profilePhone, setProfilePhone] = useState(activeUser.phone || "");
+  const [profileEmail, setProfileEmail] = useState(activeUser.email || "");
+
+  // Sync profile states with activeUser changes
+  useEffect(() => {
+    if (activeUser) {
+      setProfileName(activeUser.name || "");
+      setProfilePhone(activeUser.phone || "");
+      setProfileEmail(activeUser.email || "");
+    }
+  }, [activeUser]);
+
+  const handleUpdateProfileSubmit = (e) => {
+    e.preventDefault();
+    try {
+      updateUserProfile(activeUser.id, {
+        name: profileName.trim(),
+        phone: profilePhone.trim(),
+        email: profileEmail.trim()
+      });
+      setSuccessToast("Profil zarządcy został zaktualizowany!");
+      setTimeout(() => setSuccessToast(""), 3000);
+    } catch (err) {
+      alert("Błąd aktualizacji profilu: " + err.message);
+    }
+  };
 
   useEffect(() => {
     if (activeUser) {
@@ -313,6 +344,66 @@ export default function LandlordDashboard({ activeUser }) {
 
         </div>
 
+        {/* Zarządca Profile Editing Form */}
+        <div className="glass p-6 rounded-2xl border-brand-500/10 relative overflow-hidden space-y-4">
+          <div className="absolute right-4 top-4 text-brand-500/10 pointer-events-none">
+            <User className="w-24 h-24 stroke-[1.5]" />
+          </div>
+          
+          <h3 className="text-base font-bold text-white font-sans flex items-center gap-2 border-b border-dark-800 pb-3">
+            <User className="w-5 h-5 text-brand-400" />
+            Profil Zarządcy (Moje Dane Kontaktowe)
+          </h3>
+          
+          <p className="text-xxs text-dark-400 max-w-2xl leading-relaxed">
+            Wprowadź lub zmodyfikuj poniżej swoje dane kontaktowe. Zostaną one automatycznie udostępnione Twoim lokatorom na ich pulpitach mobilnych (sekcja „Informacje o Właścicielu”), co umożliwi im bezpośredni i poprawny kontakt telefoniczny oraz mailowy.
+          </p>
+
+          <form onSubmit={handleUpdateProfileSubmit} className="grid gap-4 sm:grid-cols-3 max-w-4xl text-xs pt-2">
+            <div>
+              <label className="block text-[9px] font-bold text-dark-400 uppercase tracking-wider mb-1">Imię i Nazwisko *</label>
+              <input
+                type="text"
+                required
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-[9px] font-bold text-dark-400 uppercase tracking-wider mb-1">Numer Telefonu</label>
+              <input
+                type="text"
+                value={profilePhone}
+                onChange={(e) => setProfilePhone(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white focus:border-brand-500 focus:outline-none"
+                placeholder="np. +48 501 234 567"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[9px] font-bold text-dark-400 uppercase tracking-wider mb-1">Adres E-mail *</label>
+              <input
+                type="email"
+                required
+                value={profileEmail}
+                onChange={(e) => setProfileEmail(e.target.value)}
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="sm:col-span-3 flex justify-end">
+              <button
+                type="submit"
+                className="py-2 px-4 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-bold transition-all cursor-pointer shadow-lg w-fit"
+              >
+                Zapisz Profil Zarządcy
+              </button>
+            </div>
+          </form>
+        </div>
+
         {/* Success Toast */}
         {successToast && (
           <div className="fixed bottom-6 right-6 z-50 bg-green-600 text-white px-5 py-2.5 rounded-full text-xs font-bold flex items-center gap-2 shadow-2xl animate-bounce">
@@ -434,7 +525,7 @@ export default function LandlordDashboard({ activeUser }) {
           </div>
           <div>
             <h1 className="text-xl font-black text-white font-sans tracking-tight">RentPortal</h1>
-            <p className="text-xxs text-dark-400 font-medium">Panel Zarządczy Właściciela (Krzysztof)</p>
+            <p className="text-xxs text-dark-400 font-medium">Panel Zarządczy Właściciela ({activeUser.name})</p>
           </div>
         </div>
 

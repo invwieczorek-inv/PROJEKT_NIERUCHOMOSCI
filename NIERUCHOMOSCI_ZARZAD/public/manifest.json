@@ -1,0 +1,19 @@
+{
+  "name": "RentPortal - Zarządzanie i Rozliczanie Najmu",
+  "short_name": "RentPortal",
+  "description": "Nowoczesny system PWA do obsługi najmu nieruchomości. Panel Właściciela oraz Panel Lokatora z rozliczeniami mediów i czatem.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f1113",
+  "theme_color": "#5c78ff",
+  "status_bar": "black-translucent",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

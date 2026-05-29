@@ -1,0 +1,39 @@
+{
+  "project": "RentPortal",
+  "role": "Lead Software Architect Constraints",
+  "architectural_rules": [
+    {
+      "rule_id": "ARCH-001",
+      "rule_name": "Strict Separation of Roles",
+      "description": "Absolutny zakaz mieszania kodu właściciela (landlord) i lokatora (tenant). Widoki (pages/views) muszą być zorganizowane w osobnych podkatalogach w celu zapobieżenia wyciekowi danych lub uprawnień oraz zachowania modularności.",
+      "enforcement": {
+        "landlord_directory": "/src/pages/landlord",
+        "tenant_directory": "/src/pages/tenant"
+      }
+    },
+    {
+      "rule_id": "ARCH-002",
+      "rule_name": "Data Storage Isolation",
+      "description": "Wszystkie operacje zapisu i odczytu danych muszą przechodzić przez dedykowany interfejs API (Service/Storage Layer) w '/src/utils/storage.js'. Bezpośrednie odwołania do window.localStorage w komponentach widoku są zabronione.",
+      "enforcement": {
+        "allowed_storage_wrapper": "/src/utils/storage.js"
+      }
+    },
+    {
+      "rule_id": "ARCH-003",
+      "rule_name": "Shared Components Neutrality",
+      "description": "Komponenty współdzielone (np. przyciski, inputy, modale, karty) muszą znajdować się w '/src/components/common' i być całkowicie bezstanowe lub niezależne od roli użytkownika.",
+      "enforcement": {
+        "shared_components_directory": "/src/components/common"
+      }
+    },
+    {
+      "rule_id": "ARCH-004",
+      "rule_name": "Strict Relational Modeling in LocalStorage",
+      "description": "Zapisy w LocalStorage muszą zachowywać integralność referencyjną opisaną w SPECIFICATION.md za pomocą jednoznacznych kluczy obcych (foreign keys).",
+      "enforcement": {
+        "validation": "Foreign key relationships must be checked and maintained during write operations."
+      }
+    }
+  ]
+}

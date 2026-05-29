@@ -1,0 +1,10 @@
+Działasz jako Główny Architekt Oprogramowania. Budujemy aplikację webową PWA do obsługi najmu nieruchomości o nazwie "RentPortal". 
+
+Stack technologiczny: React.js (Vite), Tailwind CSS, LocalStorage do przechowywania danych (MVP).
+
+Zasady rygoru deweloperskiego:
+1. Przed napisaniem kodu stwórz plik `roadmap.json` z 6 krokami wdrożenia (Phase I-V). Ustaw Krok 1 jako "in_progress", a resztę jako "pending".
+2. Stwórz plik `instructions.json`, w którym zdefiniujesz regułę: "Absolutny zakaz mieszania kodu właściciela i lokatora. Widoki muszą być w osobnych podkatalogach /src/pages/landlord i /src/pages/tenant".
+3. Pierwszym krokiem ma być wygenerowanie pliku `SPECIFICATION.md` opisującego strukturę bazy danych (Properties, Users, Invoices, Meters, Messages) oraz schemat relacji między nimi.
+
+Przeanalizuj to zadanie, stwórz pliki konfiguracyjne (roadmap, instructions) oraz plik specyfikacji, a następnie zapytaj mnie o akceptację Kroku 1. Nie pisz jeszcze kodu aplikacji.

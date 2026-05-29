@@ -1,0 +1,30 @@
+# Dependency directories
+node_modules/
+NIERUCHOMOSCI_ZARZAD/node_modules/
+
+# Build outputs
+dist/
+NIERUCHOMOSCI_ZARZAD/dist/
+dist-ssr/
+NIERUCHOMOSCI_ZARZAD/dist-ssr/
+
+# Logs
+*.log
+logs/
+NIERUCHOMOSCI_ZARZAD/logs/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Local env files
+*.local
+
+# IDEs and editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

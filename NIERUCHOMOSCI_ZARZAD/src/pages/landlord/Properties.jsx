@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { 
   getPropertiesByLandlord, 
   getTenants, 
@@ -13,7 +13,10 @@ import {
   addTenantNote,
   deleteTenantNote,
   updateProperty,
-  deleteProperty
+  deleteProperty,
+  updateTenantSummary,
+  getInvoicesForTenant,
+  getPropertyById
 } from "../../utils/storage";
 import { 
   Home, 
@@ -31,8 +34,70 @@ import {
   Search,
   PlusCircle,
   Clock,
-  Edit
+  Edit,
+  X,
+  Sparkles,
+  Download
 } from "lucide-react";
+import PizZip from "pizzip";
+import Docxtemplater from "docxtemplater";
+
+function numberToPolishWords(number) {
+  if (isNaN(number) || number === null || number === undefined) return "";
+  const num = Math.floor(Number(number));
+  if (num === 0) return "zero";
+
+  const units = ["", "jeden", "dwa", "trzy", "cztery", "pięć", "sześć", "siedem", "osiem", "dziewięć"];
+  const teens = ["dziesięć", "jedenaście", "dwanaście", "trzynaście", "czternaście", "piętnaście", "szesnaście", "siedemnaście", "osiemnaście", "dziewiętnaście"];
+  const tens = ["", "dziesięć", "dwadzieścia", "trzydzieści", "czterdzieści", "pięćdziesiąt", "sześćdziesiąt", "siedemdziesiąt", "osiemdziesiąt", "dziewięćdziesiąt"];
+  const hundreds = ["", "sto", "dwieście", "trzysta", "czterysta", "pięćset", "sześćset", "siedemset", "osiemset", "dziewięćset"];
+
+  let words = [];
+
+  // Handle thousands
+  const thousands = Math.floor(num / 1000);
+  const remainder = num % 1000;
+
+  if (thousands > 0) {
+    if (thousands === 1) {
+      words.push("tysiąc");
+    } else {
+      words.push(numberToPolishWords(thousands));
+      const lastDigit = thousands % 10;
+      const lastTwoDigits = thousands % 100;
+      if (lastDigit >= 2 && lastDigit <= 4 && (lastTwoDigits < 10 || lastTwoDigits > 20)) {
+        words.push("tysiące");
+      } else {
+        words.push("tysięcy");
+      }
+    }
+  }
+
+  // Handle hundreds
+  const h = Math.floor(remainder / 100);
+  const tenRemainder = remainder % 100;
+  if (h > 0) {
+    words.push(hundreds[h]);
+  }
+
+  // Handle tens and units
+  if (tenRemainder > 0) {
+    if (tenRemainder >= 10 && tenRemainder < 20) {
+      words.push(teens[tenRemainder - 10]);
+    } else {
+      const t = Math.floor(tenRemainder / 10);
+      const u = tenRemainder % 10;
+      if (t > 0) {
+        words.push(tens[t]);
+      }
+      if (u > 0) {
+        words.push(units[u]);
+      }
+    }
+  }
+
+  return words.filter(w => w !== "").join(" ");
+}
 
 export default function LandlordProperties({ landlordId }) {
   const [properties, setProperties] = useState([]);
@@ -68,6 +133,8 @@ export default function LandlordProperties({ landlordId }) {
   const [leaseEnd, setLeaseEnd] = useState("");
   const [leaseRentAmount, setLeaseRentAmount] = useState("");
   const [leasePaymentDueDay, setLeasePaymentDueDay] = useState("10");
+  const [tenantSearchQuery, setTenantSearchQuery] = useState("");
+  const [showTenantSuggestions, setShowTenantSuggestions] = useState(false);
 
   // Add Tenant fields
   const [showAddTenantForm, setShowAddTenantForm] = useState(false);
@@ -84,7 +151,7 @@ export default function LandlordProperties({ landlordId }) {
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
 
-  useEffect(() => {
+  const loadData = () => {
     const landlordProps = getPropertiesByLandlord(landlordId);
     setProperties(landlordProps);
     setTenants(getTenants());
@@ -95,6 +162,18 @@ export default function LandlordProperties({ landlordId }) {
       docsMap[p.id] = getDocumentsForProperty(p.id);
     });
     setPropertyDocs(docsMap);
+  };
+
+  useEffect(() => {
+    loadData();
+
+    window.addEventListener("rentportal_users_updated", loadData);
+    window.addEventListener("rentportal_properties_updated", loadData);
+
+    return () => {
+      window.removeEventListener("rentportal_users_updated", loadData);
+      window.removeEventListener("rentportal_properties_updated", loadData);
+    };
   }, [landlordId]);
 
   const handleAddProperty = (e) => {
@@ -242,6 +321,8 @@ export default function LandlordProperties({ landlordId }) {
       setSuccessMsg("Lokator został pomyślnie przypisany do mieszkania!");
       setActivePropertyId(null);
       setSelectedTenantId("");
+      setTenantSearchQuery("");
+      setShowTenantSuggestions(false);
       setLeaseStart("");
       setLeaseEnd("");
       setLeaseRentAmount("");
@@ -321,41 +402,182 @@ export default function LandlordProperties({ landlordId }) {
     }
   };
 
+  const handleGenerateLeaseAgreement = async (propertyId, tenant) => {
+    if (!propertyId || !tenant) return;
+    const prop = properties.find(p => p.id === propertyId);
+    if (!prop) return;
+
+    try {
+      setSuccessMsg("Generowanie umowy najmu...");
+      setErrorMsg("");
+
+      // Fetch the binary template file from the public folder
+      const response = await fetch("/umowa_najmu_wzor.docx");
+      if (!response.ok) {
+        throw new Error("Nie znaleziono szablonu umowy najmu (umowa_najmu_wzor.docx) w folderze public.");
+      }
+
+      // Safeguard against SPA routing HTML fallback
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("text/html")) {
+        throw new Error("Serwer deweloperski zwrócił stronę HTML (index.html) zamiast pliku wzoru (.docx). Spróbuj odświeżyć przeglądarkę za pomocą Ctrl+F5 lub zrestartować serwer npm run dev.");
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+
+      const zip = new PizZip(arrayBuffer);
+      const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+        delimiters: {
+          start: "{{",
+          end: "}}"
+        }
+      });
+
+      // Convert rent into Polish words
+      const rentInWords = numberToPolishWords(prop.rentAmount);
+
+      // Map document template fields
+      const data = {
+        NAJEMCA_IMIE_NAZWISKO: tenant.name || "",
+        NAJEMCA_MAIL: tenant.email || "",
+        NAJEMCA_TELEFON: tenant.phone || "",
+        NAJEMCA_MIEJSCE_ZAMELDOWANIA: tenant.address || "",
+        NAJEMCA_PESEL: "", // Empty as requested ("pozostaw to miejsce puste")
+        MIESZKANIE_ADRES: `${prop.address || ""}, ${prop.city || ""}`,
+        MIESZKANIE_POWIERZCHNIA: prop.area ? `${prop.area} m²` : "",
+        MIESZKANIE_KSIEGA_WIECZYSTA: prop.landRegister || "",
+        CZYNSZ_KWOTA: prop.rentAmount ? `${prop.rentAmount} PLN` : "",
+        CZYNSZ_SLOWNIE: rentInWords ? `${rentInWords} PLN` : "",
+        KAUCJA_KWOTA: prop.depositAmount ? `${prop.depositAmount} PLN` : "",
+        DATA_ROZPOCZECIA: prop.leaseStart || "",
+        DATA_ZAKONCZENIA: prop.leaseEnd || "",
+      };
+
+      doc.render(data);
+
+      const generatedDocBlob = doc.getZip().generate({
+        type: "blob",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      });
+
+      // Read as Base64 Data URL
+      const reader = new FileReader();
+      reader.readAsDataURL(generatedDocBlob);
+      reader.onloadend = async () => {
+        const base64Data = reader.result;
+        const fileName = `Umowa_Najmu_${tenant.name.replace(/\s+/g, "_")}.docx`;
+
+        try {
+          // Send to the server to write to filesystem
+          const saveResponse = await fetch("/api/save-document", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              fileName,
+              fileData: base64Data
+            })
+          });
+
+          if (!saveResponse.ok) {
+            const errData = await saveResponse.json();
+            throw new Error(errData.error || "Serwer odmówił zapisu pliku.");
+          }
+
+          const { fileUrl } = await saveResponse.json();
+
+          // Save the STATIC URL in localStorage (virtually 0 space!)
+          addDocument({
+            property_id: propertyId,
+            tenant_id: tenant.id,
+            document_type: "lease_agreement",
+            file_name: fileName,
+            file_size: (generatedDocBlob.size / 1024).toFixed(1) + " KB",
+            file_data: fileUrl
+          });
+
+          alert("Sukces! Umowa najmu została wygenerowana i pomyślnie zapisana na dysku w folderze public/generated_docs/!");
+
+          setSuccessMsg("Umowa najmu została pomyślnie wygenerowana i załączona!");
+          setTimeout(() => setSuccessMsg(""), 3500);
+
+          // Force reactive state reload in properties view
+          const landlordProps = getPropertiesByLandlord(landlordId);
+          setProperties(landlordProps);
+
+          const updatedDocs = getDocumentsForProperty(propertyId);
+          setPropertyDocs(prev => ({
+            ...prev,
+            [propertyId]: updatedDocs
+          }));
+
+        } catch (saveErr) {
+          alert("Błąd zapisu wygenerowanego dokumentu na dysku: " + saveErr.message);
+          setErrorMsg("Błąd podczas zapisu wygenerowanego dokumentu: " + saveErr.message);
+        }
+      };
+    } catch (err) {
+      console.error(err);
+      alert("Błąd generowania umowy najmu:\n" + err.message);
+      setErrorMsg("Błąd generowania umowy najmu: " + err.message);
+    }
+  };
+
   const handleFileUpload = (e, propertyId, tenantId, docType) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    // Robust extension check to support clients with missing system PDF mime mappings
-    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) {
-      alert("Błąd: Możesz przesyłać wyłącznie pliki w formacie PDF!");
+    // Robust extension check to support PDF and Word (.docx) files
+    const isValidFile = 
+      file.type === "application/pdf" || 
+      file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      file.name.toLowerCase().endsWith(".pdf") || 
+      file.name.toLowerCase().endsWith(".docx");
+      
+    if (!isValidFile) {
+      alert("Błąd: Możesz przesyłać wyłącznie pliki w formacie PDF lub DOCX!");
       e.target.value = "";
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       let fileData = reader.result;
-      const fileSizeNum = file.size; // in bytes
       const fileSize = (file.size / 1024).toFixed(1) + " KB";
-
-      // MVP Quota Optimization: If file is larger than 100 KB, replace payload with lightweight PDF template
-      // to prevent DOMException: Failed to execute 'setItem' on 'Storage': Setting the value exceeded the quota (5MB).
-      if (fileSizeNum > 100 * 1024) {
-        fileData = "data:application/pdf;base64,JVBERi0xLjQKJdPr6gogMSAwIG9iagogIDw8IC9UeXBlIC9DYXRhbG9nIC9QYWdlcyAyIDAgUiA+PiBlbmRvYmoKMiAwIG9iagogIDw8IC9UeXBlIC9QYWdlcyAvS2lkcyBbIDMgMCBSIF0gL0NvdW50IDEgPj4gZW5kb2JqCjMgMCBvYmoKICA8PCAvVHlwZSAvUGFnZSAvUGFyZW50IDIgMCBSIC9NZWRpYUJveCBbIDAgMCA1OTUgODQyIF0gL1Jlc291cmNlcyA8PCA+PiAvQ29udGVudHMgNCAwIFIgPj4gZW5kb2JqCjQgMCBvYmoKICA8PCAvTGVuZ3RoIDU5ID4+IHN0cmVhbQogIEJUIC9GMSAxMiBUZiA3MCA3MDAgVGQgKFN5bXVsYWNqYSB1bW93eSBuYWptdSB3IFJlbnRQb3J0YWwpIFRqIEVUIAogIGVuZHN0cmVhbSBlbmRvYmoKeHJlZgowIDUKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTkgMDAwMDAgbiAKMDAwMDAwMDExOCAwMDAwMCBuIAowMDAwMDAwMjIzIDAwMDAwIG4gCnRyYWlsZXIKICA8PCAvU2l6ZSA1IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgozMzMKJSVFT0YK";
-        alert(
-          `Optymalizacja MVP:\nPlik "${file.name}" (${fileSize}) przekracza limit LocalStorage przeglądarki (5MB na całą aplikację). Aby uniknąć błędu zapisu, zaimportowaliśmy ten plik do bazy danych jako zoptymalizowany dokument PDF. Możesz go normalnie otworzyć i przeglądać w systemie!`
-        );
-      }
+      const uniqueFileName = `${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
 
       try {
+        setSuccessMsg("Przesyłanie dokumentu...");
+
+        // Send to server to write to filesystem
+        const saveResponse = await fetch("/api/save-document", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            fileName: uniqueFileName,
+            fileData: fileData
+          })
+        });
+
+        if (!saveResponse.ok) {
+          const errData = await saveResponse.json();
+          throw new Error(errData.error || "Serwer odmówił zapisu pliku.");
+        }
+
+        const { fileUrl } = await saveResponse.json();
+
         addDocument({
           property_id: propertyId,
           tenant_id: tenantId,
           document_type: docType,
           file_name: file.name,
           file_size: fileSize,
-          file_data: fileData
+          file_data: fileUrl
         });
 
         // Update local state
@@ -371,7 +593,7 @@ export default function LandlordProperties({ landlordId }) {
         setSuccessMsg(`Pomyślnie dołączono plik: ${file.name}`);
         setTimeout(() => setSuccessMsg(""), 3500);
       } catch (err) {
-        alert("Błąd zapisu: " + err.message);
+        alert("Błąd zapisu dokumentu na dysku: " + err.message);
         e.target.value = "";
       }
     };
@@ -610,195 +832,285 @@ export default function LandlordProperties({ landlordId }) {
 
       {/* Assign Tenant Form Overlay */}
       {/* Assign Tenant Form Overlay */}
+      {/* Assign Tenant Form Overlay */}
       {activePropertyId && (
-        <div className="glass p-6 rounded-2xl border-brand-500/20">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 border-b border-dark-800/80 pb-3">
-            <div>
-              <h3 className="text-lg font-semibold text-white">
-                Przydziel Lokatora do Mieszkania:
-              </h3>
-              <p className="text-xs text-brand-400 font-medium">
-                {properties.find(p => p.id === activePropertyId)?.title}
-              </p>
-            </div>
-            <button
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-950/80 backdrop-blur-md overflow-y-auto animate-fade-in font-sans">
+          <div className="glass max-w-2xl w-full p-6 rounded-2xl border-brand-500/20 space-y-6 shadow-2xl relative text-left">
+            <button 
               type="button"
               onClick={() => {
-                setShowAddTenantForm(!showAddTenantForm);
+                setActivePropertyId(null);
+                setShowAddTenantForm(false);
                 setErrorMsg("");
                 setSuccessMsg("");
               }}
-              className="py-2 px-3 bg-brand-600/10 hover:bg-brand-600/25 border border-brand-500/20 text-brand-300 rounded-xl text-xxs font-bold transition-all cursor-pointer self-start"
+              className="absolute top-4 right-4 p-1.5 bg-dark-900 hover:bg-dark-800 text-dark-400 hover:text-white rounded-lg transition-colors cursor-pointer"
             >
-              {showAddTenantForm ? "← Wróć do przypisywania" : "+ Dodaj nowego lokatora do systemu"}
+              <X className="w-4 h-4" />
             </button>
+
+            <div className="border-b border-dark-800 pb-3">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-brand-400" />
+                Przydziel Lokatora do Mieszkania
+              </h3>
+              <p className="text-xs text-brand-300 font-semibold mt-1">
+                Lokal: {properties.find(p => p.id === activePropertyId)?.title.split(",")[0]}
+              </p>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddTenantForm(!showAddTenantForm);
+                  setErrorMsg("");
+                  setSuccessMsg("");
+                }}
+                className="py-2 px-3 bg-brand-600/10 hover:bg-brand-600/25 border border-brand-500/20 text-brand-300 rounded-xl text-xxs font-bold transition-all cursor-pointer"
+              >
+                {showAddTenantForm ? "← Wybierz lokatora z bazy" : "➕ Stwórz i dodaj nowego lokatora"}
+              </button>
+            </div>
+
+            {showAddTenantForm ? (
+              <form onSubmit={handleAddTenant} className="space-y-4 text-xs">
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-sans text-brand-400">Dane Nowego Lokatora</h4>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Imię i Nazwisko *</label>
+                    <input 
+                      type="text" required placeholder="np. Jan Kowalski"
+                      value={tenantName} onChange={(e) => setTenantName(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Adres E-mail *</label>
+                    <input 
+                      type="email" required placeholder="np. jan@lokator.pl"
+                      value={tenantEmail} onChange={(e) => setTenantEmail(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Numer telefonu *</label>
+                    <input 
+                      type="text" required placeholder="np. +48 602 987 654"
+                      value={tenantPhone} onChange={(e) => setTenantPhone(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Dowód Osobisty (Seria i Nr) *</label>
+                    <input 
+                      type="text" required placeholder="np. ABC 123456"
+                      value={tenantIdCard} onChange={(e) => setTenantIdCard(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Adres zamieszkania *</label>
+                    <input 
+                      type="text" required placeholder="np. ul. Mickiewicza 4/12, Kraków"
+                      value={tenantAddress} onChange={(e) => setTenantAddress(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider mt-4 mb-2 pt-3 border-t border-dark-800 font-sans text-brand-400">Dane Współlokatora (Opcjonalnie)</h4>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Imię i Nazwisko</label>
+                    <input 
+                      type="text" placeholder="np. Maria Kowalska"
+                      value={roommateName} onChange={(e) => setRoommateName(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Adres E-mail</label>
+                    <input 
+                      type="email" placeholder="np. maria@wspollokator.pl"
+                      value={roommateEmail} onChange={(e) => setRoommateEmail(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Numer telefonu</label>
+                    <input 
+                      type="text" placeholder="np. +48 602 111 222"
+                      value={roommatePhone} onChange={(e) => setRoommatePhone(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Dowód Osobisty (Seria i Nr)</label>
+                    <input 
+                      type="text" placeholder="np. XYZ 987654"
+                      value={roommateIdCard} onChange={(e) => setRoommateIdCard(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-dark-800">
+                  <button 
+                    type="button" onClick={() => setShowAddTenantForm(false)}
+                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800"
+                  >
+                    Anuluj
+                  </button>
+                  <button 
+                    type="submit" 
+                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand"
+                  >
+                    Zapisz Lokatora
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleAssignTenant} className="space-y-4 text-xs">
+                <div className="relative">
+                  <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">
+                    Wyszukaj i Wybierz Lokatora *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Wpisz pierwsze litery nazwiska lub e-mail lokatora..."
+                      value={tenantSearchQuery}
+                      onFocus={() => setShowTenantSuggestions(true)}
+                      onBlur={() => setTimeout(() => setShowTenantSuggestions(false), 250)}
+                      onChange={(e) => {
+                        setTenantSearchQuery(e.target.value);
+                        setSelectedTenantId("");
+                        setShowTenantSuggestions(true);
+                      }}
+                      className="w-full bg-dark-900 border border-dark-800 focus:border-brand-500 rounded-xl px-3 py-2 text-white text-sm focus:outline-none"
+                    />
+                    {selectedTenantId && (
+                      <span className="absolute inset-y-0 right-0 flex items-center pr-3 text-green-400 font-sans text-xs font-bold">
+                        ✓ Wybrano
+                      </span>
+                    )}
+                  </div>
+
+                  {showTenantSuggestions && (
+                    <div className="absolute z-50 w-full mt-1 bg-dark-900 border border-dark-800 rounded-xl shadow-2xl overflow-hidden max-h-[180px] overflow-y-auto font-sans text-xs">
+                      {(() => {
+                        const filtered = tenants.filter(t => {
+                          const q = tenantSearchQuery.toLowerCase().trim();
+                          if (!q) return true;
+                          return (
+                            (t.name || "").toLowerCase().includes(q) ||
+                            (t.email || "").toLowerCase().includes(q)
+                          );
+                        });
+
+                        if (filtered.length === 0) {
+                          return (
+                            <div className="p-3 text-dark-500 italic text-center text-white">
+                              Brak lokatorów o podanej nazwie
+                            </div>
+                          );
+                        }
+
+                        return filtered.map(t => {
+                          const isArchived = t.isArchived;
+                          const isAssigned = !!t.property_id;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedTenantId(t.id);
+                                setTenantSearchQuery(t.name);
+                                setShowTenantSuggestions(false);
+                              }}
+                              className={`w-full text-left px-4 py-2.5 hover:bg-brand-600 hover:text-white text-white flex justify-between items-center border-b border-dark-850/60 last:border-0 transition-colors cursor-pointer ${isArchived ? "opacity-50" : ""}`}
+                            >
+                              <div>
+                                <div className="font-semibold text-white flex items-center gap-1.5">
+                                  {t.name}
+                                  {isArchived && (
+                                    <span className="text-[8px] bg-dark-850 text-dark-400 px-1.5 py-0.5 rounded border border-dark-750 font-normal">
+                                      Archiwalny
+                                    </span>
+                                  )}
+                                  {!isArchived && isAssigned && (
+                                    <span className="text-[8px] bg-brand-500/10 text-brand-400 px-1.5 py-0.5 rounded border border-brand-500/20 font-normal">
+                                      Aktywny najem
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-dark-400">{t.email}</div>
+                              </div>
+                              {selectedTenantId === t.id && (
+                                <span className="text-green-400 font-bold text-xs">✓</span>
+                              )}
+                            </button>
+                          );
+                        });
+                      })()}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Początek umowy najmu *</label>
+                    <input 
+                      type="date" required
+                      value={leaseStart} onChange={(e) => setLeaseStart(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Koniec umowy najmu *</label>
+                    <input 
+                      type="date" required
+                      value={leaseEnd} onChange={(e) => setLeaseEnd(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Ustalony czynsz najmu (PLN) *</label>
+                    <input 
+                      type="number" required placeholder="np. 2500"
+                      value={leaseRentAmount} onChange={(e) => setLeaseRentAmount(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Termin płatności (Dzień miesiąca) *</label>
+                    <input 
+                      type="number" required min="1" max="31" placeholder="np. 10"
+                      value={leasePaymentDueDay} onChange={(e) => setLeasePaymentDueDay(e.target.value)}
+                      className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3">
+                  <button 
+                    type="button" onClick={() => setActivePropertyId(null)}
+                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800"
+                  >
+                    Anuluj
+                  </button>
+                  <button 
+                    type="submit" 
+                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand"
+                  >
+                    Zatwierdź Wynajem
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
-
-          {showAddTenantForm ? (
-            <form onSubmit={handleAddTenant} className="space-y-4 bg-dark-950/40 p-5 rounded-xl border border-dark-850">
-              <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2 font-sans text-brand-400">Dane Nowego Lokatora</h4>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Imię i Nazwisko *</label>
-                  <input 
-                    type="text" required placeholder="np. Jan Kowalski"
-                    value={tenantName} onChange={(e) => setTenantName(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Adres E-mail *</label>
-                  <input 
-                    type="email" required placeholder="np. jan@lokator.pl"
-                    value={tenantEmail} onChange={(e) => setTenantEmail(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Numer telefonu *</label>
-                  <input 
-                    type="text" required placeholder="np. +48 602 987 654"
-                    value={tenantPhone} onChange={(e) => setTenantPhone(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Dowód Osobisty (Seria i Nr) *</label>
-                  <input 
-                    type="text" required placeholder="np. ABC 123456"
-                    value={tenantIdCard} onChange={(e) => setTenantIdCard(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Adres zamieszkania *</label>
-                  <input 
-                    type="text" required placeholder="np. ul. Mickiewicza 4/12, Kraków"
-                    value={tenantAddress} onChange={(e) => setTenantAddress(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <h4 className="text-xs font-bold text-white uppercase tracking-wider mt-4 mb-2 pt-3 border-t border-dark-800 font-sans text-brand-400">Dane Współlokatora (Opcjonalnie)</h4>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Imię i Nazwisko</label>
-                  <input 
-                    type="text" placeholder="np. Maria Kowalska"
-                    value={roommateName} onChange={(e) => setRoommateName(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Adres E-mail</label>
-                  <input 
-                    type="email" placeholder="np. maria@wspollokator.pl"
-                    value={roommateEmail} onChange={(e) => setRoommateEmail(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Numer telefonu</label>
-                  <input 
-                    type="text" placeholder="np. +48 602 111 222"
-                    value={roommatePhone} onChange={(e) => setRoommatePhone(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1 font-sans">Dowód Osobisty (Seria i Nr)</label>
-                  <input 
-                    type="text" placeholder="np. XYZ 987654"
-                    value={roommateIdCard} onChange={(e) => setRoommateIdCard(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4 border-t border-dark-800">
-                <button 
-                  type="button" onClick={() => setShowAddTenantForm(false)}
-                  className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800"
-                >
-                  Anuluj
-                </button>
-                <button 
-                  type="submit" 
-                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand"
-                >
-                  Zapisz Lokatora
-                </button>
-              </div>
-            </form>
-          ) : (
-            <form onSubmit={handleAssignTenant} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Wybierz Lokatora *</label>
-                <select 
-                  value={selectedTenantId}
-                  onChange={(e) => setSelectedTenantId(e.target.value)}
-                  required
-                  className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
-                >
-                  <option value="">-- Wybierz lokatora --</option>
-                  {tenants.map(t => (
-                    <option key={t.id} value={t.id}>{t.name} ({t.email})</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Początek umowy najmu *</label>
-                  <input 
-                    type="date" required
-                    value={leaseStart} onChange={(e) => setLeaseStart(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Koniec umowy najmu *</label>
-                  <input 
-                    type="date" required
-                    value={leaseEnd} onChange={(e) => setLeaseEnd(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Ustalony czynsz najmu (PLN) *</label>
-                  <input 
-                    type="number" required placeholder="np. 2500"
-                    value={leaseRentAmount} onChange={(e) => setLeaseRentAmount(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none font-medium"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wider mb-1.5 font-sans">Termin płatności (Dzień miesiąca) *</label>
-                  <input 
-                    type="number" required min="1" max="31" placeholder="np. 10"
-                    value={leasePaymentDueDay} onChange={(e) => setLeasePaymentDueDay(e.target.value)}
-                    className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white text-sm focus:border-brand-500 focus:outline-none font-medium"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3">
-                <button 
-                  type="button" onClick={() => setActivePropertyId(null)}
-                  className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800"
-                >
-                  Anuluj
-                </button>
-                <button 
-                  type="submit" 
-                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand"
-                >
-                  Zatwierdź Wynajem
-                </button>
-              </div>
-            </form>
-          )}
         </div>
       )}
 
@@ -807,7 +1119,7 @@ export default function LandlordProperties({ landlordId }) {
         {properties.map(p => {
           const tenant = tenants.find(t => t.id === p.tenant_id);
           const docs = propertyDocs[p.id] || [];
-          const agreement = docs.find(d => d.document_type === "lease_agreement");
+          const agreements = docs.filter(d => d.document_type === "lease_agreement");
           const protocol = docs.find(d => d.document_type === "handover_protocol");
 
           return (
@@ -930,48 +1242,68 @@ export default function LandlordProperties({ landlordId }) {
                           Dokumenty Najmu (PDF)
                         </span>
                         
-                        {/* Lease Agreement */}
-                        <div className="flex items-center justify-between text-xxs bg-dark-950 p-2 rounded-lg border border-dark-800">
-                          <div className="truncate flex items-center gap-1.5 max-w-[65%]">
-                            <FileText className="w-3.5 h-3.5 text-brand-400 shrink-0" />
-                            {agreement ? (
-                              <span className="text-white truncate font-medium" title={agreement.file_name}>
-                                {agreement.file_name}
-                              </span>
-                            ) : (
-                              <span className="text-dark-500 italic">Brak umowy najmu</span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {agreement ? (
-                              <>
-                                <button
-                                  onClick={() => openDocumentFile(agreement.file_data, agreement.file_name)}
-                                  className="p-1 text-brand-400 hover:text-brand-300 transition-colors"
-                                  title="Zobacz PDF"
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => handleFileDelete(p.id, agreement.id)}
-                                  className="p-1 text-red-400 hover:text-red-300 transition-colors"
-                                  title="Usuń"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </>
-                            ) : (
-                              <label className="cursor-pointer text-brand-400 hover:text-brand-300 font-bold flex items-center gap-0.5" title="Dołącz PDF">
-                                <UploadCloud className="w-4 h-4" />
+                        {/* Lease Agreement Section with List of Documents */}
+                        <div className="flex flex-col gap-1.5 bg-dark-950 p-2 rounded-lg border border-dark-800 text-xxs">
+                          <div className="flex items-center justify-between border-b border-dark-800/50 pb-1.5 mb-1.5">
+                            <span className="text-dark-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                              <FileText className="w-3.5 h-3.5 text-brand-400 shrink-0" />
+                              Umowa Najmu (DOCX / PDF)
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleGenerateLeaseAgreement(p.id, tenant)}
+                                className="text-brand-400 hover:text-brand-300 font-bold flex items-center gap-0.5 transition-colors cursor-pointer"
+                                title="Generuj umowę najmu z szablonu Word (.docx)"
+                              >
+                                <Sparkles className="w-3 h-3 text-brand-400" />
+                                Generuj
+                              </button>
+                              <span className="text-dark-700">|</span>
+                              <label className="cursor-pointer text-brand-400 hover:text-brand-300 font-bold flex items-center gap-0.5" title="Wgraj skan PDF lub plik Word (.docx)">
+                                <UploadCloud className="w-3.5 h-3.5" />
+                                <span>Wgraj</span>
                                 <input
                                   type="file"
-                                  accept="application/pdf"
+                                  accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                                   className="hidden"
                                   onChange={(e) => handleFileUpload(e, p.id, tenant.id, "lease_agreement")}
                                 />
                               </label>
-                            )}
+                            </div>
                           </div>
+                          {agreements.length > 0 ? (
+                            <div className="space-y-1.5">
+                              {agreements.map(agreement => {
+                                const isDocx = agreement.file_name.toLowerCase().endsWith(".docx");
+                                return (
+                                  <div key={agreement.id} className="flex items-center justify-between bg-dark-900/40 p-1.5 rounded border border-dark-800/40">
+                                    <span className="text-white truncate font-medium max-w-[70%]" title={agreement.file_name}>
+                                      {agreement.file_name}
+                                    </span>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <button
+                                        onClick={() => openDocumentFile(agreement.file_data, agreement.file_name)}
+                                        className="p-1 text-brand-400 hover:text-brand-300 transition-colors"
+                                        title={isDocx ? "Pobierz plik Word (.docx)" : "Otwórz plik PDF"}
+                                      >
+                                        {isDocx ? <Download className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                      </button>
+                                      <button
+                                        onClick={() => handleFileDelete(p.id, agreement.id)}
+                                        className="p-1 text-red-400 hover:text-red-300 transition-colors"
+                                        title="Usuń"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <span className="text-dark-500 italic px-1 py-0.5">Brak załączonych dokumentów</span>
+                          )}
                         </div>
 
                         {/* Handover Protocol */}
@@ -1021,6 +1353,8 @@ export default function LandlordProperties({ landlordId }) {
                       </div>
 
                       <TenantNotesSection tenant={tenant} />
+                      <TenantFinalSummarySection tenant={tenant} />
+                      <TenantHistoryTimelineSection tenant={tenant} />
 
                     </div>
                     
@@ -1044,6 +1378,9 @@ export default function LandlordProperties({ landlordId }) {
                         setLeaseRentAmount(p.rentAmount || "");
                         setLeasePaymentDueDay(p.paymentDueDay || "10");
                         setShowAddTenantForm(false);
+                        setSelectedTenantId("");
+                        setTenantSearchQuery("");
+                        setShowTenantSuggestions(false);
                       }}
                       className="w-full py-2 px-3 bg-brand-500/10 hover:bg-brand-500/25 border border-brand-500/20 text-brand-300 rounded-xl text-xxs font-bold transition-all flex items-center justify-center gap-1.5"
                     >
@@ -1194,6 +1531,318 @@ function TenantNotesSection({ tenant }) {
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+function generateDraftSummary(tenant) {
+  const notesCount = (tenant.notes || []).length;
+  const noteTopics = (tenant.notes || []).map(n => `"${n.title}"`).join(", ");
+  
+  const invoices = getInvoicesForTenant(tenant.id) || [];
+  const totalInvoices = invoices.length;
+  
+  let timelinessText = "Brak zarejestrowanej historii płatności.";
+  if (totalInvoices > 0) {
+    const latePayments = invoices.filter(i => {
+      if (i.status !== "paid" || !i.paymentDate || !i.dueDate) return false;
+      return new Date(i.paymentDate) > new Date(i.dueDate);
+    }).length;
+    
+    if (latePayments === 0) {
+      timelinessText = "Płatności były regulowane w 100% terminowo i rzetelnie.";
+    } else {
+      timelinessText = `Regulowanie opłat z opóźnieniami (${latePayments} opóźnionych płatności na ${totalInvoices} faktur).`;
+    }
+  }
+
+  let notesText = "Brak odnotowanych uwag lub incydentów w rejestrze notatek.";
+  if (notesCount > 0) {
+    notesText = `W trakcie najmu sporządzono ${notesCount} notatek (dotyczących m.in.: ${noteTopics}).\n`;
+    const contentSummaries = (tenant.notes || []).map(n => `- ${n.title}: ${n.content.slice(0, 80)}${n.content.length > 80 ? '...' : ''}`).join("\n");
+    notesText += `Szczegóły zdarzeń:\n${contentSummaries}`;
+  }
+
+  return `PODSUMOWANIE LOKATORA: ${tenant.name.toUpperCase()}
+
+1. RZETELNOŚĆ I TERMINOWOŚĆ FINANSOWA:
+${timelinessText}
+
+2. ZACHOWANIE I RELACJE (NA PODSTAWIE NOTATEK):
+${notesText}
+
+3. SPOSÓB ROZWIĄZYWANIA KONFLIKTÓW I CECHY OSOBISTE:
+Lokator w komunikacji jest... [opisz np. ugodowy / wymagający / bezkonfliktowy]. Wszelkie usterki zgłaszał...
+
+4. REKOMENDACJA KOŃCOWA:
+[Wpisz np. Zdecydowanie polecam tego najemcę kolejnym wynajmującym. / Najemca poprawny, ale wymagał dyscyplinowania płatniczego.]`;
+}
+
+export function TenantFinalSummarySection({ tenant }) {
+  const [summary, setSummary] = useState(tenant.finalSummary || "");
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+
+  useEffect(() => {
+    setSummary(tenant.finalSummary || "");
+  }, [tenant.finalSummary]);
+
+  const handleSave = () => {
+    try {
+      updateTenantSummary(tenant.id, summary);
+      setIsSaved(true);
+      setIsEditing(false);
+      setTimeout(() => setIsSaved(false), 2000);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleGenerate = () => {
+    if (summary && !window.confirm("Czy chcesz zastąpić obecną treść automatycznie wygenerowanym szkicem podsumowania na podstawie notatek i historii wpłat?")) {
+      return;
+    }
+    const draft = generateDraftSummary(tenant);
+    setSummary(draft);
+    setIsEditing(true);
+  };
+
+  return (
+    <div className="mt-4 pt-3 border-t border-dark-800/80 space-y-3 font-sans text-xxs">
+      <div className="flex items-center justify-between">
+        <span className="text-dark-500 text-[10px] block font-bold uppercase tracking-wider text-dark-400 flex items-center gap-1">
+          📋 Podsumowanie Końcowe Lokatora
+        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={handleGenerate}
+            className="text-brand-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-0.5 bg-brand-500/10 px-2 py-0.5 rounded transition-all cursor-pointer border border-brand-500/20"
+            title="Szkicuj podsumowanie z notatek i historii rozliczeń"
+          >
+            ✨ Generuj Szkic
+          </button>
+          {!isEditing ? (
+            <button
+              type="button"
+              onClick={() => setIsEditing(true)}
+              className="text-brand-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 bg-brand-500/10 px-2 py-0.5 rounded transition-all cursor-pointer border border-brand-500/20"
+            >
+              Edytuj
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSave}
+              className="text-green-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 bg-green-500/20 px-2 py-0.5 rounded transition-all cursor-pointer border border-green-500/25"
+            >
+              Zapisz
+            </button>
+          )}
+        </div>
+      </div>
+
+      {isEditing ? (
+        <div className="space-y-2 animate-fade-in">
+          <textarea
+            rows="5"
+            className="w-full bg-dark-950 border border-dark-800 focus:border-brand-500 rounded-xl p-2.5 text-[10px] text-white focus:outline-none placeholder-dark-500 leading-normal"
+            placeholder="Wpisz podsumowanie końcowe, cechy lokatora, rzetelność, komunikację..."
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSummary(tenant.finalSummary || "");
+                setIsEditing(false);
+              }}
+              className="px-2 py-1 bg-dark-900 border border-dark-800 hover:bg-dark-800 text-white rounded text-[9px] transition-all cursor-pointer"
+            >
+              Anuluj
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="px-2 py-1 bg-brand-600 hover:bg-brand-500 text-white rounded text-[9px] font-bold transition-all cursor-pointer"
+            >
+              Zapisz podsumowanie
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-dark-950/40 rounded-xl border border-dark-850 p-2.5 text-[9px] text-dark-300 leading-relaxed relative min-h-[45px] flex items-center justify-center">
+          {summary ? (
+            <p className="whitespace-pre-wrap w-full text-left">{summary}</p>
+          ) : (
+            <p className="text-dark-500 italic text-center py-1">
+              Brak sporządzonego podsumowania końcowego najemcy.
+            </p>
+          )}
+          {isSaved && (
+            <span className="absolute top-2 right-2 text-[8px] bg-green-500/20 border border-green-500/30 text-green-400 px-1.5 py-0.5 rounded animate-fade-in font-bold">
+              Zapisano!
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TenantHistoryTimelineSection({ tenant }) {
+  // Build a unified, chronologically sorted activity/lease history
+  const unifiedTimeline = useMemo(() => {
+    if (!tenant) return [];
+    
+    let list = [];
+    
+    // 1. Add creation event
+    if (tenant.createdAt) {
+      list.push({
+        date: tenant.createdAt,
+        type: "creation",
+        title: "Utworzenie profilu",
+        desc: "Utworzono profil lokatora w systemie.",
+        colorClass: "bg-blue-500 border-blue-400 text-blue-450",
+        badge: "Profil"
+      });
+    }
+
+    // 2. Map all leaseHistory records into activation and deactivation events
+    if (tenant.leaseHistory && tenant.leaseHistory.length > 0) {
+      tenant.leaseHistory.forEach(lh => {
+        if (lh.leaseStart) {
+          list.push({
+            date: lh.leaseStart + "T12:00:00.000Z",
+            type: "activation",
+            title: "Rozpoczęcie najmu",
+            desc: `Rozpoczęcie najmu lokalu: ${lh.propertyTitle}`,
+            colorClass: "bg-green-500 border-green-400 text-green-400",
+            badge: "Najem",
+            leaseStart: lh.leaseStart,
+            leaseEnd: lh.leaseEnd,
+            propertyTitle: lh.propertyTitle
+          });
+        }
+        
+        list.push({
+          date: lh.archivedAt || (lh.leaseEnd ? lh.leaseEnd + "T23:59:59.000Z" : new Date().toISOString()),
+          type: "deactivation",
+          title: "Zakończenie najmu",
+          desc: `Zakończenie najmu lokalu: ${lh.propertyTitle} i przeniesienie do archiwum`,
+          colorClass: "bg-red-500 border-red-400 text-red-400",
+          badge: "Archiwum",
+          leaseStart: lh.leaseStart,
+          leaseEnd: lh.leaseEnd,
+          propertyTitle: lh.propertyTitle
+        });
+      });
+    }
+
+    // 3. Map any non-duplicate activity log entries
+    if (tenant.activityLog && tenant.activityLog.length > 0) {
+      tenant.activityLog.forEach(log => {
+        if (log.type === "creation") return; // skip profile creation since we added it
+        
+        // Skip activation/deactivation from activityLog if they are already represented in leaseHistory
+        const isLeaseRep = list.some(item => 
+          item.propertyTitle === log.propertyTitle && 
+          (item.leaseStart === log.leaseStart || new Date(item.date).toDateString() === new Date(log.date).toDateString())
+        );
+        if (isLeaseRep) return;
+
+        let typeTitle = "Zdarzenie";
+        let color = "bg-brand-500 border-brand-400 text-brand-350";
+        let badge = "Log";
+        
+        if (log.type === "activation") {
+          typeTitle = "Rozpoczęcie najmu";
+          color = "bg-green-500 border-green-400 text-green-400";
+          badge = "Najem";
+        } else if (log.type === "reactivation") {
+          typeTitle = "Przywrócenie (nowy najem)";
+          color = "bg-green-500 border-green-450 text-green-400";
+          badge = "Reaktywacja";
+        } else if (log.type === "deactivation") {
+          typeTitle = "Zakończenie najmu";
+          color = "bg-red-500 border-red-400 text-red-400";
+          badge = "Archiwum";
+        }
+
+        list.push({
+          date: log.date,
+          type: log.type,
+          title: typeTitle,
+          desc: log.description,
+          colorClass: color,
+          badge: badge,
+          leaseStart: log.leaseStart,
+          leaseEnd: log.leaseEnd,
+          propertyTitle: log.propertyTitle
+        });
+      });
+    }
+
+    // 4. Add current active lease if they are currently active
+    if (!tenant.isArchived && tenant.property_id) {
+      const activeProperty = getPropertyById(tenant.property_id);
+      if (activeProperty) {
+        list.push({
+          date: activeProperty.leaseStart ? activeProperty.leaseStart + "T12:00:00.000Z" : new Date().toISOString(),
+          type: "activation",
+          title: "Bieżący najem (Aktywny)",
+          desc: `Rozpoczęcie aktualnego najmu lokalu: ${activeProperty.title}`,
+          colorClass: "bg-emerald-500 border-emerald-450 text-emerald-400 font-bold",
+          badge: "Aktywny Najem",
+          leaseStart: activeProperty.leaseStart,
+          leaseEnd: activeProperty.leaseEnd,
+          propertyTitle: activeProperty.title,
+          isActive: true
+        });
+      }
+    }
+
+    // Sort descending (newest first)
+    return list.sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [tenant]);
+
+  return (
+    <div className="space-y-3 font-sans text-xxs mt-3 pt-3 border-t border-dark-850">
+      <span className="text-dark-500 text-[10px] block font-bold uppercase tracking-wider text-dark-400">
+        ⌛ Historia Statusów i Okresów Aktywności
+      </span>
+      {unifiedTimeline.length === 0 ? (
+        <p className="text-[9px] text-dark-500 italic text-center py-2">Brak wpisów osi czasu.</p>
+      ) : (
+        <div className="relative border-l border-dark-800 pl-4 ml-1.5 space-y-4 py-1 max-h-[160px] overflow-y-auto pr-1">
+          {unifiedTimeline.map((item, idx) => {
+            const isCurrentActive = item.isActive;
+            return (
+              <div key={idx} className="relative space-y-0.5">
+                <span className={`absolute -left-[20px] top-1 flex h-2 w-2 items-center justify-center rounded-full ${isCurrentActive ? 'bg-green-500/25 border-green-400' : 'bg-brand-500/25 border-brand-400'}`}>
+                  <span className={`h-1 w-1 rounded-full ${isCurrentActive ? 'bg-green-400 animate-ping' : 'bg-brand-400'}`}></span>
+                </span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`font-bold ${isCurrentActive ? 'text-green-400' : 'text-white'} text-[9px]`}>
+                    {item.title}
+                  </span>
+                  <span className="text-[8px] text-dark-500 font-mono">
+                    {new Date(item.date).toLocaleDateString('pl-PL')}
+                  </span>
+                </div>
+                <p className="text-dark-400 text-[9px] leading-snug">{item.desc}</p>
+                {item.leaseStart && (
+                  <div className="text-[8px] text-dark-500 font-mono">
+                    Kontrakt: {item.leaseStart} &rarr; {item.leaseEnd || "bezterminowo"}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,9 +1,22 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { getInvoicesForTenant, getPropertyById, getPaymentTimeliness } from "../../utils/storage";
 import { CreditCard, CheckCircle, AlertTriangle, Calendar, FileText } from "lucide-react";
 
 export default function TenantInvoices({ tenantId }) {
-  const invoices = getInvoicesForTenant(tenantId).sort((a, b) => new Date(b.issueDate || b.createdAt) - new Date(a.issueDate || a.createdAt));
+  const [invoices, setInvoices] = useState([]);
+
+  const handleReload = () => {
+    setInvoices(getInvoicesForTenant(tenantId).sort((a, b) => new Date(b.issueDate || b.createdAt) - new Date(a.issueDate || a.createdAt)));
+  };
+
+  useEffect(() => {
+    handleReload();
+
+    window.addEventListener("rentportal_invoices_updated", handleReload);
+    return () => {
+      window.removeEventListener("rentportal_invoices_updated", handleReload);
+    };
+  }, [tenantId]);
 
   return (
     <div className="space-y-6">
@@ -22,7 +35,7 @@ export default function TenantInvoices({ tenantId }) {
             📊 Zestawienie Opłat Czynszowych
           </h3>
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-xs text-dark-300 min-w-[700px]">
+            <table className="w-full border-collapse text-left text-xs text-dark-300 min-w-[950px]">
               <thead>
                 <tr className="border-b border-dark-800 text-[10px] font-bold text-dark-400 uppercase tracking-wider">
                   <th className="pb-3">Rachunek (Okres)</th>
@@ -31,6 +44,8 @@ export default function TenantInvoices({ tenantId }) {
                   <th className="pb-3 text-right">Czynsz admin.</th>
                   <th className="pb-3 text-right">Opłata za media</th>
                   <th className="pb-3 text-right text-brand-400 font-bold">Opłata (Suma)</th>
+                  <th className="pb-3 text-right text-green-400">Otrzymano</th>
+                  <th className="pb-3 text-right text-brand-400 font-bold">Różnica (Saldo)</th>
                   <th className="pb-3 text-center">Status</th>
                   <th className="pb-3 text-center">Terminowość wpłaty</th>
                 </tr>
@@ -40,6 +55,7 @@ export default function TenantInvoices({ tenantId }) {
                   const timeliness = getPaymentTimeliness(inv.due_date, inv.paymentDate, inv.status);
                   const isPaid = inv.status === "paid";
                   const isOverdue = inv.status === "overdue";
+                  const diff = (inv.receivedPayment || 0) - inv.amount;
                   
                   return (
                     <tr key={inv.id} className="hover:bg-dark-900/30 transition-colors font-sans">
@@ -56,6 +72,22 @@ export default function TenantInvoices({ tenantId }) {
                       </td>
                       <td className="py-3.5 text-right font-mono text-brand-300 font-black">
                         {(inv.amount || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                      </td>
+                      <td className="py-3.5 text-right font-mono text-green-400 font-semibold">
+                        {(inv.receivedPayment || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                      </td>
+                      <td className="py-3.5 text-right font-mono">
+                        {diff > 0 ? (
+                          <span className="inline-flex text-green-450 font-bold bg-green-500/10 px-2 py-0.5 rounded-full">
+                            +{diff.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                          </span>
+                        ) : diff < 0 ? (
+                          <span className="inline-flex text-red-450 font-bold bg-red-500/10 px-2 py-0.5 rounded-full">
+                            {diff.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                          </span>
+                        ) : (
+                          <span className="text-dark-500">—</span>
+                        )}
                       </td>
                       <td className="py-3.5 text-center">
                         <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${

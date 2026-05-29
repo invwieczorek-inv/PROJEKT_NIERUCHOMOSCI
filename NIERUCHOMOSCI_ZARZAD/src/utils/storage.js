@@ -19,6 +19,118 @@ const KEYS = {
   SESSION: "rentportal_session_v3"
 };
 
+// Cyrillic to Latin homoglyph mapping and name normalization for robust matching
+export const normalizeStringForMatching = (str) => {
+  if (!str) return "";
+  const homoglyphs = {
+    'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'і': 'i', 'я': 'ya',
+    'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P',
+    'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I'
+  };
+  let normalized = str.trim().toLowerCase();
+  let mapped = "";
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized[i];
+    mapped += homoglyphs[char] || char;
+  }
+  return mapped.replace(/[^a-z0-9]/g, "");
+};
+
+// Deduplicate user list by name (homoglyph/whitespace-independent) or email
+export const deduplicateUsers = (users) => {
+  const uniqueUsers = [];
+  const mergedUsers = [];
+
+  users.forEach(u => {
+    if (u.role !== "tenant") {
+      uniqueUsers.push(u);
+      return;
+    }
+    
+    const match = mergedUsers.find(existing => {
+      const emailMatch = u.email && existing.email && u.email.toLowerCase().trim() === existing.email.toLowerCase().trim();
+      const nameMatch = u.name && existing.name && normalizeStringForMatching(u.name) === normalizeStringForMatching(existing.name);
+      return emailMatch || nameMatch;
+    });
+
+    if (!match) {
+      mergedUsers.push({ ...u });
+    } else {
+      // Merge property mapping
+      if (u.property_id && !match.property_id) {
+        match.property_id = u.property_id;
+        match.isArchived = false;
+      }
+      if (u.isArchived === false && match.isArchived === true) {
+        match.isArchived = false;
+      }
+      
+      // Merge details
+      if (!match.email && u.email) match.email = u.email;
+      if (!match.phone && u.phone) match.phone = u.phone;
+      if (!match.idCard && u.idCard) match.idCard = u.idCard;
+      if (!match.address && u.address) match.address = u.address;
+      if (!match.roommate && u.roommate) match.roommate = u.roommate;
+      
+      // Merge leaseHistory
+      const existingLeaseHistory = match.leaseHistory || [];
+      const incomingLeaseHistory = u.leaseHistory || [];
+      const combinedLeases = [...existingLeaseHistory, ...incomingLeaseHistory];
+      const uniqueLeases = [];
+      const leaseKeys = new Set();
+      combinedLeases.forEach(lh => {
+        const key = `${lh.propertyId}-${lh.leaseStart}`;
+        if (!leaseKeys.has(key)) {
+          leaseKeys.add(key);
+          uniqueLeases.push(lh);
+        }
+      });
+      match.leaseHistory = uniqueLeases;
+
+      // Merge notes
+      const existingNotes = match.notes || [];
+      const incomingNotes = u.notes || [];
+      const combinedNotes = [...existingNotes, ...incomingNotes];
+      const uniqueNotes = [];
+      const noteKeys = new Set();
+      combinedNotes.forEach(n => {
+        const key = n.id || `${n.title}-${n.content}`;
+        if (!noteKeys.has(key)) {
+          noteKeys.add(key);
+          uniqueNotes.push(n);
+        }
+      });
+      match.notes = uniqueNotes;
+
+      // Merge activityLog
+      const existingLogs = match.activityLog || [];
+      const incomingLogs = u.activityLog || [];
+      const combinedLogs = [...existingLogs, ...incomingLogs];
+      const uniqueLogs = [];
+      const logKeys = new Set();
+      combinedLogs.forEach(l => {
+        const key = l.id || `${l.type}-${l.date}`;
+        if (!logKeys.has(key)) {
+          logKeys.add(key);
+          uniqueLogs.push(l);
+        }
+      });
+      match.activityLog = uniqueLogs.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      // Merge finalSummary
+      if (u.finalSummary && u.finalSummary !== match.finalSummary) {
+        if (!match.finalSummary) {
+          match.finalSummary = u.finalSummary;
+        } else if (!match.finalSummary.includes(u.finalSummary)) {
+          match.finalSummary = `${match.finalSummary}\n\n${u.finalSummary}`;
+        }
+      }
+    }
+  });
+
+  return [...uniqueUsers, ...mergedUsers];
+};
+
 // Initialize LocalStorage with mock data if keys do not exist
 export const initializeStorage = () => {
   if (!localStorage.getItem(KEYS.USERS)) {
@@ -52,6 +164,34 @@ const getItems = (key) => {
   initializeStorage();
   const data = localStorage.getItem(key);
   let items = data ? JSON.parse(data) : [];
+
+  if (key === KEYS.USERS) {
+    const deduplicated = deduplicateUsers(items);
+    if (items.length !== deduplicated.length) {
+      localStorage.setItem(KEYS.USERS, JSON.stringify(deduplicated));
+      items = deduplicated;
+
+      // Reactively notify all pages and active simulator elements
+      window.dispatchEvent(new Event("rentportal_users_updated"));
+
+      // Sync active session if the current user got merged
+      const sessionData = localStorage.getItem(KEYS.SESSION);
+      if (sessionData) {
+        const sessionUser = JSON.parse(sessionData);
+        const stillExists = deduplicated.some(u => u.id === sessionUser.id);
+        if (!stillExists) {
+          const mergedUser = deduplicated.find(u => 
+            (u.email && sessionUser.email && u.email.toLowerCase().trim() === sessionUser.email.toLowerCase().trim()) ||
+            (u.name && sessionUser.name && normalizeStringForMatching(u.name) === normalizeStringForMatching(sessionUser.name))
+          );
+          if (mergedUser) {
+            localStorage.setItem(KEYS.SESSION, JSON.stringify(mergedUser));
+            window.dispatchEvent(new Event("rentportal_session_updated"));
+          }
+        }
+      }
+    }
+  }
   
   if (key === KEYS.INVOICES) {
     let updated = false;
@@ -199,7 +339,34 @@ const getItems = (key) => {
 };
 
 const saveItems = (key, items) => {
-  localStorage.setItem(key, JSON.stringify(items));
+  try {
+    localStorage.setItem(key, JSON.stringify(items));
+  } catch (err) {
+    if (err.name === 'QuotaExceededError' || err.code === 22 || err.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+      const confirmClear = window.confirm(
+        "⚠️ Uwaga: Pamięć LocalStorage przeglądarki została przepełniona z powodu wgrania bardzo dużych plików PDF (limit wynosi 5MB).\n\nCzy chcesz automatycznie wyczyścić historię wgranych dokumentów testowych, aby zwolnić miejsce i dokończyć bieżącą operację?"
+      );
+      if (confirmClear) {
+        localStorage.removeItem(KEYS.DOCUMENTS);
+        
+        // If currently saving documents, retry with an empty list containing the newly added item
+        if (key === KEYS.DOCUMENTS) {
+          // If we were adding a document, save just the new items list containing it (which is very lightweight)
+          localStorage.setItem(key, JSON.stringify(items.slice(-1))); 
+        } else {
+          // If saving something else (like property or invoice), retry saving it now that documents are cleared
+          localStorage.setItem(key, JSON.stringify(items));
+        }
+        
+        // Dispatch events to reload components
+        window.dispatchEvent(new Event("rentportal_users_updated"));
+        window.dispatchEvent(new Event("rentportal_properties_updated"));
+        alert("Pomyślnie wyczyszczono pamięć dokumentów! Ponawiam zapis...");
+        return;
+      }
+    }
+    throw err;
+  }
 };
 
 // ==========================================
@@ -224,14 +391,16 @@ export const switchSessionUser = (userId) => {
 // ==========================================
 // USERS
 // ==========================================
-export const getUsers = () => getItems(KEYS.USERS);
+export const getUsers = () => {
+  return getItems(KEYS.USERS);
+};
 
 export const getUserById = (id) => {
   return getUsers().find(u => u.id === id) || null;
 };
 
 export const getTenants = () => {
-  return getUsers().filter(u => u.role === "tenant" && !u.isArchived);
+  return getUsers().filter(u => u.role === "tenant");
 };
 
 export const addTenant = (tenantData) => {
@@ -247,7 +416,15 @@ export const addTenant = (tenantData) => {
     passwordHash: "123",
     role: "tenant",
     property_id: null,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    activityLog: [
+      {
+        id: `log-${Date.now()}`,
+        type: "creation",
+        date: new Date().toISOString(),
+        description: "Utworzono profil lokatora"
+      }
+    ]
   };
 
   users.push(newTenant);
@@ -303,6 +480,7 @@ export const addProperty = (propertyData) => {
   };
   properties.push(newProperty);
   saveItems(KEYS.PROPERTIES, properties);
+  window.dispatchEvent(new Event("rentportal_properties_updated"));
   return newProperty;
 };
 
@@ -315,12 +493,46 @@ export const updatePropertyTenant = (propertyId, tenantId, leaseStart = null, le
   
   // Clean old tenant property reference
   const oldTenantId = properties[propIndex].tenant_id;
+  const prop = properties[propIndex];
+  
   const updatedUsers = users.map(u => {
     if (oldTenantId && u.id === oldTenantId) {
-      return { ...u, property_id: null };
+      const historyLog = u.activityLog || [];
+      const newHistoryLog = [
+        ...historyLog,
+        {
+          id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: "deactivation",
+          date: new Date().toISOString(),
+          propertyId: prop.id,
+          propertyTitle: prop.title,
+          description: `Zakończenie najmu lokalu: ${prop.title}`
+        }
+      ];
+      return { ...u, property_id: null, activityLog: newHistoryLog };
     }
     if (tenantId && u.id === tenantId) {
-      return { ...u, property_id: propertyId };
+      const historyLog = u.activityLog || [];
+      const isReactivation = u.isArchived || (u.leaseHistory && u.leaseHistory.length > 0);
+      const logType = isReactivation ? "reactivation" : "activation";
+      const logDesc = isReactivation 
+        ? `Ponowne przywrócenie. Rozpoczęcie najmu lokalu: ${prop.title}`
+        : `Rozpoczęcie najmu lokalu: ${prop.title}`;
+      
+      const newHistoryLog = [
+        ...historyLog,
+        {
+          id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: logType,
+          date: new Date().toISOString(),
+          propertyId: prop.id,
+          propertyTitle: prop.title,
+          description: logDesc,
+          leaseStart,
+          leaseEnd
+        }
+      ];
+      return { ...u, property_id: propertyId, isArchived: false, activityLog: newHistoryLog };
     }
     return u;
   });
@@ -420,6 +632,7 @@ export const addInvoice = (invoiceData) => {
 
   invoices.push(newInvoice);
   saveItems(KEYS.INVOICES, invoices);
+  window.dispatchEvent(new Event("rentportal_invoices_updated"));
   return newInvoice;
 };
 
@@ -444,6 +657,7 @@ export const bookInvoicePayment = (invoiceId, receivedAmount, paymentDate = null
   }
 
   saveItems(KEYS.INVOICES, invoices);
+  window.dispatchEvent(new Event("rentportal_invoices_updated"));
   return invoices[index];
 };
 
@@ -577,6 +791,11 @@ export const addDocument = (docData) => {
   };
   docs.push(newDoc);
   saveItems(KEYS.DOCUMENTS, docs);
+  
+  // Force reactiveness across both panels
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+  window.dispatchEvent(new Event("rentportal_properties_updated"));
+  
   return newDoc;
 };
 
@@ -584,13 +803,26 @@ export const deleteDocument = (docId) => {
   const docs = getDocuments();
   const filtered = docs.filter(d => d.id !== docId);
   saveItems(KEYS.DOCUMENTS, filtered);
+  
+  // Force reactiveness across both panels
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+  window.dispatchEvent(new Event("rentportal_properties_updated"));
 };
 
 // Converts Base64 DataURL into a trusted browser Blob URL and opens it safely in a new tab
 export const openDocumentFile = (base64Data, fileName) => {
   try {
-    // If not a data URL, fallback directly to simple window.open
+    // If not a data URL, fallback directly to simple window.open or programatic download for docx
     if (!base64Data.startsWith("data:")) {
+      if (base64Data.toLowerCase().endsWith(".docx") || (fileName && fileName.toLowerCase().endsWith(".docx"))) {
+        const link = document.createElement("a");
+        link.href = base64Data;
+        link.download = fileName || "Umowa_Najmu.docx";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
       window.open(base64Data, "_blank");
       return;
     }
@@ -607,10 +839,14 @@ export const openDocumentFile = (base64Data, fileName) => {
     const blob = new Blob([u8arr], { type: mime });
     const blobUrl = URL.createObjectURL(blob);
     
-    // Open in new tab by creating a virtual trusted link
+    // Open in new tab or trigger download based on type
     const link = document.createElement("a");
     link.href = blobUrl;
-    link.target = "_blank";
+    if (mime.includes("officedocument") || (fileName && fileName.toLowerCase().endsWith(".docx"))) {
+      link.download = fileName || "Umowa_Najmu.docx";
+    } else {
+      link.target = "_blank";
+    }
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -862,6 +1098,22 @@ export const archiveTenant = (propertyId) => {
   user.isArchived = true;
   user.property_id = null;
 
+  // Append deactivation log
+  const historyLog = user.activityLog || [];
+  user.activityLog = [
+    ...historyLog,
+    {
+      id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: "deactivation",
+      date: new Date().toISOString(),
+      propertyId: prop.id,
+      propertyTitle: prop.title,
+      description: `Zakończenie najmu lokalu: ${prop.title}`,
+      leaseStart: prop.leaseStart,
+      leaseEnd: prop.leaseEnd
+    }
+  ];
+
   // Unlink property
   properties[propIndex] = {
     ...prop,
@@ -939,6 +1191,84 @@ export const updateUserProfile = (userId, profileData) => {
   window.dispatchEvent(new Event("rentportal_session_updated"));
   
   return users[index];
+};
+
+export const updateTenantSummary = (tenantId, summary) => {
+  const users = getItems(KEYS.USERS);
+  const userIndex = users.findIndex(u => u.id === tenantId);
+  if (userIndex === -1) throw new Error("Lokator nie istnieje w bazie.");
+
+  users[userIndex].finalSummary = summary.trim();
+  saveItems(KEYS.USERS, users);
+
+  // Dispatch events to refresh views
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+  return users[userIndex];
+};
+
+export const deleteUser = (userId) => {
+  const users = getItems(KEYS.USERS);
+  const updatedUsers = users.filter(u => u.id !== userId);
+  
+  // Clean up any properties references
+  const properties = getProperties();
+  let propUpdated = false;
+  const updatedProperties = properties.map(p => {
+    if (p.tenant_id === userId) {
+      propUpdated = true;
+      return { ...p, tenant_id: null, leaseStart: null, leaseEnd: null, paymentDueDay: null };
+    }
+    return p;
+  });
+  
+  saveItems(KEYS.USERS, updatedUsers);
+  if (propUpdated) {
+    saveItems(KEYS.PROPERTIES, updatedProperties);
+    window.dispatchEvent(new Event("rentportal_properties_updated"));
+  }
+  
+  // Also clean up current session if this user was logged in
+  const sessionData = localStorage.getItem(KEYS.SESSION);
+  if (sessionData) {
+    const sessionUser = JSON.parse(sessionData);
+    if (sessionUser.id === userId) {
+      const landlord = updatedUsers.find(u => u.role === "landlord");
+      if (landlord) {
+        localStorage.setItem(KEYS.SESSION, JSON.stringify(landlord));
+        window.dispatchEvent(new Event("rentportal_session_updated"));
+      } else {
+        localStorage.removeItem(KEYS.SESSION);
+      }
+    }
+  }
+  
+  window.dispatchEvent(new Event("rentportal_users_updated"));
+};
+
+export const deleteMeterReading = (readingId) => {
+  const meters = getItems(KEYS.METERS);
+  const updatedMeters = meters.filter(m => m.id !== readingId);
+  saveItems(KEYS.METERS, updatedMeters);
+  
+  window.dispatchEvent(new Event("rentportal_meters_updated"));
+  window.dispatchEvent(new Event("rentportal_invoices_updated"));
+};
+
+export const updateMeterReadingValue = (readingId, newValue) => {
+  const meters = getItems(KEYS.METERS);
+  const idx = meters.findIndex(m => m.id === readingId);
+  if (idx === -1) throw new Error("Odczyt nie istnieje.");
+  
+  meters[idx] = {
+    ...meters[idx],
+    reading_value: Number(newValue)
+  };
+  
+  saveItems(KEYS.METERS, meters);
+  
+  window.dispatchEvent(new Event("rentportal_meters_updated"));
+  window.dispatchEvent(new Event("rentportal_invoices_updated"));
+  return meters[idx];
 };
 
 

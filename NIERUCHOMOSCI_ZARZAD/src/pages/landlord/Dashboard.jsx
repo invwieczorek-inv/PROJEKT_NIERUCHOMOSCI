@@ -7,6 +7,7 @@ import {
   updateUserProfile
 } from "../../utils/storage";
 import LandlordProperties from "./Properties";
+import LandlordTenants from "./Tenants";
 import LandlordInvoices from "./Invoices";
 import LandlordMeters from "./Meters";
 import LandlordMessages from "./Messages";
@@ -186,6 +187,8 @@ export default function LandlordDashboard({ activeUser }) {
     switch (activeTab) {
       case "properties":
         return <LandlordProperties landlordId={activeUser.id} />;
+      case "tenants":
+        return <LandlordTenants landlordId={activeUser.id} />;
       case "invoices":
         return <LandlordInvoices landlordId={activeUser.id} />;
       case "meters":
@@ -545,6 +548,14 @@ export default function LandlordDashboard({ activeUser }) {
             }`}
           >
             Mieszkania
+          </button>
+          <button
+            onClick={() => setActiveTab("tenants")}
+            className={`py-2 px-4 rounded-xl text-xs font-semibold transition-all ${
+              activeTab === "tenants" ? "bg-brand-600 text-white shadow-md" : "text-dark-300 hover:bg-dark-800 hover:text-white"
+            }`}
+          >
+            Lokatorzy
           </button>
           <button
             onClick={() => setActiveTab("invoices")}

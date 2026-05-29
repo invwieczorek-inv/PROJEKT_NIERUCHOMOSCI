@@ -14,7 +14,8 @@ import {
   getUsers,
   addTenant,
   updatePropertyTenant,
-  addMeterReading
+  addMeterReading,
+  updateUserProfile
 } from "../../utils/storage";
 import { CreditCard, Plus, Check, Calendar, PlusCircle, AlertTriangle, CheckCircle, FileText, Info, X, Sparkles, Trash2, Coins, TrendingUp, History, UserPlus, Database, Layers } from "lucide-react";
 
@@ -103,18 +104,23 @@ export default function LandlordInvoices({ landlordId }) {
   const [histMeterValue, setHistMeterValue] = useState("");
   const [histMeterDate, setHistMeterDate] = useState("");
 
-  useEffect(() => {
+  const handleReloadData = () => {
     setInvoices(getInvoices().sort((a, b) => new Date(b.issueDate || b.createdAt) - new Date(a.issueDate || a.createdAt)));
     setExpenses(getExpenses().sort((a, b) => new Date(b.date) - new Date(a.date)));
     
     const props = getPropertiesByLandlord(landlordId).filter(p => p.tenant_id !== null);
     setProperties(props);
     
-    // For historical imports
     const allProps = getPropertiesByLandlord(landlordId);
     setAllLandlordProperties(allProps);
     setAllTenants(getUsers().filter(u => u.role === "tenant"));
+  };
 
+  useEffect(() => {
+    handleReloadData();
+    
+    // Set default initial selections once
+    const props = getPropertiesByLandlord(landlordId).filter(p => p.tenant_id !== null);
     if (props.length > 0) {
       setSelectedPropertyId(props[0].id);
       setAmountRent(props[0].rentAmount);
@@ -122,6 +128,20 @@ export default function LandlordInvoices({ landlordId }) {
       setAmountUtilities("150"); // sensible default
       setExpensePropertyId(props[0].id);
     }
+  }, [landlordId]);
+
+  useEffect(() => {
+    window.addEventListener("rentportal_invoices_updated", handleReloadData);
+    window.addEventListener("rentportal_properties_updated", handleReloadData);
+    window.addEventListener("rentportal_users_updated", handleReloadData);
+    window.addEventListener("rentportal_expenses_updated", handleReloadData);
+    
+    return () => {
+      window.removeEventListener("rentportal_invoices_updated", handleReloadData);
+      window.removeEventListener("rentportal_properties_updated", handleReloadData);
+      window.removeEventListener("rentportal_users_updated", handleReloadData);
+      window.removeEventListener("rentportal_expenses_updated", handleReloadData);
+    };
   }, [landlordId]);
 
   // Pre-populate tenant & rent for historical invoices based on property selection
@@ -138,6 +158,37 @@ export default function LandlordInvoices({ landlordId }) {
       }
     }
   }, [histInvPropertyId, allLandlordProperties]);
+  // Pre-fill received amount for paid/unpaid/partial status changes in historical wizard
+  useEffect(() => {
+    const total = Number(histInvRent || 0) + Number(histInvAdmin || 0) + Number(histInvUtilities || 0);
+    if (histInvStatus === "paid") {
+      setHistInvReceived(String(total));
+    } else if (histInvStatus === "unpaid") {
+      setHistInvReceived("0");
+    }
+  }, [histInvStatus, histInvRent, histInvAdmin, histInvUtilities]);
+  // Auto-fill existing tenant details when landlord types the tenant's name in the historical wizard
+  useEffect(() => {
+    if (histTenantName && histTenantName.trim().length > 3) {
+      const existing = getUsers().find(u => 
+        u.role === "tenant" && 
+        u.name.toLowerCase().trim() === histTenantName.toLowerCase().trim()
+      );
+      if (existing) {
+        setHistTenantEmail(existing.email || "");
+        setHistTenantPhone(existing.phone || "");
+        setHistTenantIdCard(existing.idCard || "");
+        setHistTenantAddress(existing.address || "");
+        
+        if (existing.roommate) {
+          setHistRoommateName(existing.roommate.name || "");
+          setHistRoommatePhone(existing.roommate.phone || "");
+          setHistRoommateEmail(existing.roommate.email || "");
+          setHistRoommateIdCard(existing.roommate.idCard || "");
+        }
+      }
+    }
+  }, [histTenantName]);
 
   // Pre-populate meter numbers for historical meter readings
   useEffect(() => {
@@ -172,24 +223,53 @@ export default function LandlordInvoices({ landlordId }) {
     }
 
     try {
-      const newTenant = addTenant({
+      const email = histTenantEmail.trim().toLowerCase();
+      const existingUser = getUsers().find(u => u.email.toLowerCase() === email);
+
+      let tenantId = "";
+      let isNew = false;
+
+      const profileData = {
         name: histTenantName.trim(),
         email: histTenantEmail.trim(),
         phone: histTenantPhone.trim(),
         idCard: histTenantIdCard.trim(),
         address: histTenantAddress.trim(),
+        isArchived: false, // Ensure they are active
         roommate: histRoommateName.trim() ? {
           name: histRoommateName.trim(),
           phone: histRoommatePhone.trim(),
           email: histRoommateEmail.trim(),
           idCard: histRoommateIdCard.trim()
         } : null
-      });
+      };
+
+      if (existingUser) {
+        if (existingUser.role !== "tenant") {
+          setErrorMsg(`Użytkownik z tym adresem e-mail istnieje i pełni inną rolę (${existingUser.role}).`);
+          return;
+        }
+        // Update existing tenant profile
+        updateUserProfile(existingUser.id, profileData);
+        tenantId = existingUser.id;
+      } else {
+        // Add new tenant
+        const newTenant = addTenant({
+          name: profileData.name,
+          email: profileData.email,
+          phone: profileData.phone,
+          idCard: profileData.idCard,
+          address: profileData.address,
+          roommate: profileData.roommate
+        });
+        tenantId = newTenant.id;
+        isNew = true;
+      }
 
       if (histPropertyId !== "none") {
         updatePropertyTenant(
           histPropertyId,
-          newTenant.id,
+          tenantId,
           histLeaseStart || null,
           histLeaseEnd || null,
           histRentAmount ? Number(histRentAmount) : null,
@@ -197,7 +277,11 @@ export default function LandlordInvoices({ landlordId }) {
         );
       }
 
-      setSuccessMsg(`Pomyślnie dodano lokatora ${newTenant.name}!`);
+      setSuccessMsg(
+        isNew 
+          ? `Pomyślnie dodano lokatora ${profileData.name}!` 
+          : `Pomyślnie zaktualizowano i przypisano lokatora ${profileData.name}!`
+      );
       
       // Reset fields
       setHistTenantName("");
@@ -222,6 +306,7 @@ export default function LandlordInvoices({ landlordId }) {
       setAllTenants(getUsers().filter(u => u.role === "tenant"));
       
       window.dispatchEvent(new Event("rentportal_properties_updated"));
+      window.dispatchEvent(new Event("rentportal_users_updated"));
       
       setShowHistoryWizard(false);
     } catch (err) {
@@ -258,13 +343,19 @@ export default function LandlordInvoices({ landlordId }) {
       const total = rent + admin + utils;
 
       let received = 0;
+      if (histInvStatus === "unpaid") {
+        received = 0;
+      } else {
+        received = histInvReceived !== "" ? Number(histInvReceived) : total;
+      }
+
       let status = "unpaid";
-      if (histInvStatus === "paid") {
-        received = total;
+      if (received >= total) {
         status = "paid";
-      } else if (histInvStatus === "partial") {
-        received = Number(histInvReceived || 0);
-        status = received >= total ? "paid" : "unpaid";
+      } else if (received > 0) {
+        status = "partial";
+      } else {
+        status = "unpaid";
       }
 
       addInvoice({
@@ -302,6 +393,7 @@ export default function LandlordInvoices({ landlordId }) {
 
       // Refresh invoices
       setInvoices(getInvoices().sort((a, b) => new Date(b.issueDate || b.createdAt) - new Date(a.issueDate || a.createdAt)));
+      window.dispatchEvent(new Event("rentportal_invoices_updated"));
       setShowHistoryWizard(false);
     } catch (err) {
       setErrorMsg(err.message);
@@ -943,6 +1035,90 @@ export default function LandlordInvoices({ landlordId }) {
               <span className="font-bold text-white">{stats.utilitiesSum.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</span>
             </div>
           </div>
+        </div>
+
+        {/* Wykaz Anomalii Płatności */}
+        <div className="bg-dark-950/40 p-4 rounded-xl border border-dark-850 space-y-3 font-sans">
+          <div className="flex items-center justify-between border-b border-dark-800/40 pb-2">
+            <span className="text-[10px] text-dark-400 font-semibold uppercase tracking-wider block flex items-center gap-1.5">
+              ⚠️ Wykaz Anomalii Płatności (Niedopłaty i Nadpłaty)
+            </span>
+            <span className="text-[10px] text-dark-500 font-mono">
+              Znaleziono: {filteredInvoices.filter(inv => (inv.receivedPayment || 0) !== inv.amount).length} anomalii
+            </span>
+          </div>
+
+          {(() => {
+            const anomalies = filteredInvoices.filter(inv => (inv.receivedPayment || 0) !== inv.amount);
+            if (anomalies.length === 0) {
+              return (
+                <div className="bg-green-500/5 border border-green-500/10 rounded-xl p-3 text-center text-xs text-green-400">
+                  ✅ Wszystkie wpłaty w tym okresie są w pełni zbilansowane. Brak niedopłat lub nadpłat!
+                </div>
+              );
+            }
+
+            return (
+              <div className="grid gap-2 max-h-[220px] overflow-y-auto pr-1">
+                {anomalies.map((inv) => {
+                  const diff = (inv.receivedPayment || 0) - inv.amount;
+                  const isUnderpaid = diff < 0;
+                  const propertyName = allLandlordProperties.find(p => p.id === inv.property_id)?.title.split(",")[0] || "Mieszkanie";
+                  const tenantName = allTenants.find(t => t.id === inv.tenant_id)?.name || "Lokator";
+                  
+                  let billingMonth = "";
+                  if (inv.issueDate) {
+                    const d = new Date(inv.issueDate);
+                    billingMonth = d.toLocaleString('pl-PL', { month: 'long', year: 'numeric' });
+                  } else {
+                    billingMonth = inv.title;
+                  }
+
+                  return (
+                    <div 
+                      key={inv.id}
+                      className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl border text-xs transition-all ${
+                        isUnderpaid 
+                          ? "bg-red-500/5 border-red-500/10 hover:border-red-500/20 text-red-300"
+                          : "bg-green-500/5 border-green-500/10 hover:border-green-500/20 text-green-300"
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white capitalize">{billingMonth}</span>
+                          <span className="text-[10px] text-dark-500 font-mono">ID: {inv.id}</span>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded font-sans ${
+                            isUnderpaid 
+                              ? "bg-red-500/10 text-red-400"
+                              : "bg-green-500/10 text-green-400"
+                          }`}>
+                            {isUnderpaid ? "Niedopłata" : "Nadpłata"}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-dark-400">
+                          Nieruchomość: <strong className="text-dark-300">{propertyName}</strong> | Lokator: <strong className="text-dark-300">{tenantName}</strong>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-4 justify-between sm:justify-end">
+                        <div className="text-right">
+                          <span className="text-dark-500 block text-[9px]">Wymagane / Otrzymane:</span>
+                          <span className="font-mono text-dark-350">
+                            {inv.amount.toFixed(2)} / <strong className={isUnderpaid ? "text-red-400" : "text-green-400"}>{(inv.receivedPayment || 0).toFixed(2)}</strong> PLN
+                          </span>
+                        </div>
+                        <div className={`text-right px-2.5 py-1 rounded-lg font-bold min-w-[90px] ${
+                          isUnderpaid ? "bg-red-500/10 text-red-400" : "bg-green-500/10 text-green-400"
+                        }`}>
+                          {isUnderpaid ? "" : "+"}{diff.toFixed(2)} PLN
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -1698,9 +1874,15 @@ export default function LandlordInvoices({ landlordId }) {
                         <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Imię i nazwisko *</label>
                         <input
                           type="text" required placeholder="np. Jan Kowalski"
+                          list="existing-tenants-list"
                           value={histTenantName} onChange={(e) => setHistTenantName(e.target.value)}
                           className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 text-white focus:border-brand-500 focus:outline-none"
                         />
+                        <datalist id="existing-tenants-list">
+                          {allTenants.map(t => (
+                            <option key={t.id} value={t.name} />
+                          ))}
+                        </datalist>
                       </div>
                       <div>
                         <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Adres E-mail *</label>
@@ -1966,20 +2148,15 @@ export default function LandlordInvoices({ landlordId }) {
                       <>
                         <div>
                           <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">
-                            {histInvStatus === "paid" ? "Otrzymana kwota (Tylko do odczytu)" : "Faktycznie otrzymana kwota *"}
+                            Faktycznie otrzymana kwota *
                           </label>
                           <input
                             type="number"
                             required
-                            disabled={histInvStatus === "paid"}
-                            value={histInvStatus === "paid" ? (Number(histInvRent) + Number(histInvAdmin) + Number(histInvUtilities) || "") : histInvReceived}
+                            value={histInvReceived}
                             onChange={(e) => setHistInvReceived(e.target.value)}
                             placeholder="np. 1500"
-                            className={`w-full border rounded-xl px-3 py-1.5 font-medium focus:outline-none ${
-                              histInvStatus === "paid"
-                                ? "bg-dark-950 border-dark-850 text-dark-500 cursor-not-allowed select-none"
-                                : "bg-dark-900 border-dark-800 text-white focus:border-brand-500"
-                            }`}
+                            className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-1.5 font-medium text-white focus:border-brand-500 focus:outline-none"
                           />
                         </div>
                         <div>

@@ -21,7 +21,8 @@ import {
   MapPin, 
   AlertCircle,
   FileText,
-  Eye
+  Eye,
+  Download
 } from "lucide-react";
 
 export default function TenantDashboard({ activeUser }) {
@@ -106,7 +107,7 @@ export default function TenantDashboard({ activeUser }) {
       );
     }
 
-    const agreement = documents.find(d => d.document_type === "lease_agreement");
+    const agreements = documents.filter(d => d.document_type === "lease_agreement");
     const protocol = documents.find(d => d.document_type === "handover_protocol");
 
     return (
@@ -263,41 +264,45 @@ export default function TenantDashboard({ activeUser }) {
 
         </div>
 
-        {/* PDF Documents View for Tenants */}
+        {/* Documents View for Tenants */}
         <div className="glass p-6 rounded-2xl space-y-4">
           <h3 className="text-base font-bold text-white font-sans flex items-center gap-2 border-b border-dark-800 pb-3">
             <FileText className="w-5 h-5 text-brand-400" />
-            Moje Dokumenty i Umowy (PDF)
+            Moje Dokumenty i Umowy (PDF / DOCX)
           </h3>
           
           <div className="grid gap-4 sm:grid-cols-2">
             
             {/* Lease Agreement Card */}
-            <div className="bg-dark-900/50 border border-dark-800 p-4 rounded-xl flex items-center justify-between gap-4">
-              <div className="truncate space-y-1">
-                <span className="text-xxs font-semibold px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-400 tracking-wider">
-                  Podpisana Umowa Najmu
-                </span>
-                {agreement ? (
-                  <>
-                    <h4 className="font-semibold text-white text-xs truncate mt-1.5" title={agreement.file_name}>
-                      {agreement.file_name}
-                    </h4>
-                    <p className="text-xxs text-dark-500">Rozmiar: {agreement.file_size}</p>
-                  </>
-                ) : (
-                  <p className="text-xs text-dark-500 italic mt-1.5">Brak załączonego pliku umowy najmu</p>
-                )}
-              </div>
-              
-              {agreement && (
-                <button
-                  onClick={() => openDocumentFile(agreement.file_data, agreement.file_name)}
-                  className="py-1.5 px-3 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xxs font-bold transition-all flex items-center gap-1 shrink-0"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  Zobacz PDF
-                </button>
+            <div className="bg-dark-900/50 border border-dark-800 p-4 rounded-xl flex flex-col gap-3">
+              <span className="text-xxs font-semibold px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-400 tracking-wider w-max">
+                Umowa Najmu (DOCX / PDF)
+              </span>
+              {agreements.length > 0 ? (
+                <div className="space-y-2">
+                  {agreements.map(agreement => {
+                    const isDocx = agreement.file_name.toLowerCase().endsWith(".docx");
+                    return (
+                      <div key={agreement.id} className="flex items-center justify-between bg-dark-950/60 p-2.5 rounded-lg border border-dark-800/80 gap-4">
+                        <div className="truncate">
+                          <h4 className="font-semibold text-white text-xs truncate" title={agreement.file_name}>
+                            {agreement.file_name}
+                          </h4>
+                          <p className="text-xxs text-dark-500">Rozmiar: {agreement.file_size}</p>
+                        </div>
+                        <button
+                          onClick={() => openDocumentFile(agreement.file_data, agreement.file_name)}
+                          className="py-1 px-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-xxs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          {isDocx ? <Download className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          {isDocx ? "Pobierz" : "Otwórz"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-dark-500 italic">Brak załączonego pliku umowy najmu</p>
               )}
             </div>
 
@@ -325,7 +330,7 @@ export default function TenantDashboard({ activeUser }) {
                   className="py-1.5 px-3 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xxs font-bold transition-all flex items-center gap-1 shrink-0"
                 >
                   <Eye className="w-3.5 h-3.5" />
-                  Zobacz PDF
+                  Otwórz plik
                 </button>
               )}
             </div>

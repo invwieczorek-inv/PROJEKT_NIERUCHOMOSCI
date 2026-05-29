@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { 
   getMeters, 
   approveMeterReading, 
@@ -6,9 +6,11 @@ import {
   getPropertyById,
   getUserById,
   addMeterReading,
-  getPropertiesByLandlord
+  getPropertiesByLandlord,
+  deleteMeterReading,
+  updateMeterReadingValue
 } from "../../utils/storage";
-import { Gauge, Check, X, Clock, Activity, Info, Plus, Coins, Zap, Flame, Calendar, Sparkles } from "lucide-react";
+import { Gauge, Check, X, Clock, Activity, Info, Plus, Coins, Zap, Flame, Calendar, Sparkles, Edit, Trash2, Building } from "lucide-react";
 
 const METER_TYPES = {
   electricity: { label: "💡 Prąd", unit: "kWh" },
@@ -24,6 +26,8 @@ export default function LandlordMeters({ landlordId }) {
   const [successMsg, setSuccessMsg] = useState("");
 
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingReading, setEditingReading] = useState(null);
+  const [editValue, setEditValue] = useState("");
   const [properties, setProperties] = useState([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState("");
   const [selectedMeterType, setSelectedMeterType] = useState("electricity");
@@ -69,13 +73,34 @@ export default function LandlordMeters({ landlordId }) {
     return DEFAULT_RATES;
   });
 
+  const propertiesWithReadings = useMemo(() => {
+    const landlordProperties = getPropertiesByLandlord(landlordId);
+    return landlordProperties.map(p => {
+      const propReadings = meters.filter(m => m.property_id === p.id);
+      return {
+        ...p,
+        readings: propReadings.sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date))
+      };
+    });
+  }, [meters, landlordId]);
+
   useEffect(() => {
-    setMeters(getMeters().sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date)));
+    const handleMetersUpdated = () => {
+      setMeters(getMeters().sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date)));
+      const props = getPropertiesByLandlord(landlordId).filter(p => p.tenant_id !== null);
+      setProperties(props);
+    };
+
+    handleMetersUpdated();
     const props = getPropertiesByLandlord(landlordId).filter(p => p.tenant_id !== null);
-    setProperties(props);
     if (props.length > 0) {
       setSelectedPropertyId(props[0].id);
     }
+
+    window.addEventListener("rentportal_meters_updated", handleMetersUpdated);
+    return () => {
+      window.removeEventListener("rentportal_meters_updated", handleMetersUpdated);
+    };
   }, [landlordId]);
 
   // Dynamically auto-suggest serial number based on property and medium selection
@@ -353,93 +378,173 @@ export default function LandlordMeters({ landlordId }) {
         )}
       </div>
 
-      {/* Historical logs list */}
-      <div className="glass p-6 rounded-2xl">
-        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+      {/* Historical logs list grouped by Properties */}
+      <div className="glass p-6 rounded-2xl space-y-6">
+        <h3 className="text-lg font-semibold text-white flex items-center gap-2 border-b border-dark-800 pb-3">
           <Activity className="w-5 h-5 text-brand-400" />
-          Historia Odczytów i Zużycie
+          Historia Odczytów i Zużycie (Grupowanie Lokalami)
         </h3>
 
         {approvedReadings.length === 0 ? (
-          <p className="text-dark-500 text-center py-6 text-sm">Brak zatwierdzonych logów w historii.</p>
+          <p className="text-dark-500 text-center py-6 text-sm">Brak zarejestrowanych logów odczytów w historii.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-sm text-dark-300">
-              <thead>
-                <tr className="border-b border-dark-800 text-xs font-semibold text-dark-400 uppercase tracking-wider">
-                  <th className="pb-3">Data</th>
-                  <th className="pb-3">Mieszkanie</th>
-                  <th className="pb-3">Licznik (Typ)</th>
-                  <th className="pb-3">Numer licznika</th>
-                  <th className="pb-3 text-right">Stan odczytu</th>
-                  <th className="pb-3 text-right">Zużycie</th>
-                  <th className="pb-3 text-right">Koszt (Brutto)</th>
-                  <th className="pb-3 text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-dark-800">
-                {approvedReadings.map((h) => {
-                  const prop = getPropertyById(h.property_id);
-                  const type = METER_TYPES[h.meter_type] || { label: h.meter_type, unit: "" };
-                  const consumption = getConsumption(h);
-                  const isApproved = h.status === "approved";
-                  const isPending = h.status === "pending_approval";
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 font-sans">
+            {propertiesWithReadings.map(p => (
+              <div 
+                key={p.id} 
+                className="glass p-5 rounded-2xl border-brand-500/10 hover:border-brand-500/20 transition-all duration-300 relative overflow-hidden group shadow-xl flex flex-col justify-between"
+              >
+                {/* Visual hover background glow */}
+                <div className="absolute top-0 right-0 w-24 h-24 bg-brand-500/5 rounded-full blur-2xl group-hover:bg-brand-500/10 transition-colors pointer-events-none" />
 
-                  return (
-                    <tr key={h.id} className={`transition-all duration-300 hover:bg-dark-900/30 ${
-                      isPending ? 'bg-yellow-500/5 border-l-2 border-yellow-500/50' : isApproved ? 'bg-green-500/5 hover:bg-green-500/10' : ''
-                    }`}>
-                      <td className="py-3.5 font-medium text-white">{h.reading_date}</td>
-                      <td className="py-3.5 text-xs text-white">{prop ? prop.title : 'Nieruchomość'}</td>
-                      <td className="py-3.5 text-xs font-semibold text-brand-300">{type.label}</td>
-                      <td className="py-3.5 font-mono text-xs text-dark-400">{h.meter_number}</td>
-                      <td className="py-3.5 text-right font-bold text-white">
-                        {h.reading_value} <span className="text-xs font-normal text-dark-500">{type.unit}</span>
-                      </td>
-                      <td className={`py-3.5 text-right font-semibold ${isPending ? 'text-emerald-400/70 italic' : 'text-emerald-400'}`}>
-                        {consumption} {isPending && <span className="text-[9px] opacity-75 font-normal block font-sans">(podgląd)</span>}
-                      </td>
-                      <td className={`py-3.5 text-right font-bold font-mono ${isPending ? 'text-green-400/70 italic font-medium' : 'text-green-400'}`}>
-                        {calculateReadingCost(h)} {isPending && <span className="text-[9px] opacity-75 font-sans font-normal block">(podgląd)</span>}
-                      </td>
-                      <td className="py-3.5 text-center">
-                        {isPending ? (
-                          <div className="flex flex-col items-center gap-1 justify-center">
-                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 animate-pulse border border-yellow-500/20">
-                              Oczekuje
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => handleApprove(h.id)}
-                                title="Zatwierdź odczyt (podświetli na zielono i doda do opłat)"
-                                className="p-1 bg-green-500/20 hover:bg-green-500 hover:text-white text-green-400 rounded-md transition-all cursor-pointer shadow-md"
-                              >
-                                <Check className="w-3.5 h-3.5 font-black" />
-                              </button>
-                              <button
-                                onClick={() => handleReject(h.id)}
-                                title="Odrzuć odczyt"
-                                className="p-1 bg-red-500/20 hover:bg-red-500 hover:text-white text-red-400 rounded-md transition-all cursor-pointer shadow-md"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
+                <div className="space-y-4">
+                  {/* Property Header */}
+                  <div className="flex justify-between items-start border-b border-dark-800 pb-3 gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="p-2 bg-dark-900 border border-dark-800 text-brand-400 rounded-xl">
+                        <Building className="w-4.5 h-4.5" />
+                      </span>
+                      <div>
+                        <h3 className="font-bold text-white text-xs tracking-tight">{p.title.split(",")[0]}</h3>
+                        <span className="text-[9px] text-dark-500 truncate block mt-0.5">{p.address}</span>
+                      </div>
+                    </div>
+                    <span className="text-[8px] text-brand-300 font-mono bg-brand-500/10 px-2 py-0.5 rounded-full border border-brand-500/20 uppercase tracking-wider shrink-0 font-bold">
+                      {p.readings.length} odczytów
+                    </span>
+                  </div>
+
+                  {/* Readings list inside property card */}
+                  <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1 custom-scrollbar">
+                    {p.readings.length === 0 ? (
+                      <p className="text-[10px] text-dark-500 italic py-6 text-center">Brak odczytów dla tego lokalu.</p>
+                    ) : (
+                      p.readings.map((h) => {
+                        const type = METER_TYPES[h.meter_type] || { label: h.meter_type, unit: "" };
+                        const consumption = getConsumption(h);
+                        const isApproved = h.status === "approved";
+                        const isPending = h.status === "pending_approval";
+                        const cost = calculateReadingCost(h);
+
+                        return (
+                          <div 
+                            key={h.id} 
+                            className={`p-3 rounded-xl border transition-all text-xxs flex flex-col gap-2.5 ${
+                              isPending 
+                                ? 'bg-yellow-500/5 border-yellow-500/25 shadow-md shadow-yellow-950/5' 
+                                : isApproved 
+                                  ? 'bg-dark-900/40 border-dark-800 hover:border-dark-700/80' 
+                                  : 'bg-red-500/5 border-red-500/20'
+                            }`}
+                          >
+                            {/* Date & Meter Serial */}
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-white flex items-center gap-1">
+                                <Calendar className="w-3.5 h-3.5 text-brand-400" />
+                                {h.reading_date}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-dark-800 border border-dark-750 text-brand-300">
+                                  {type.label}
+                                </span>
+                                <span className="text-[8px] text-dark-500 font-mono">S/N: {h.meter_number}</span>
+                              </div>
+                            </div>
+
+                            {/* Reading parameters grid */}
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-left pt-2 border-t border-dark-800/50">
+                              <div>
+                                <span className="text-[8px] text-dark-500 font-bold block uppercase tracking-wider">Stan Odczytu</span>
+                                <strong className="text-white font-mono text-[10px]">
+                                  {h.reading_value} <span className="text-[8px] font-normal text-dark-400">{type.unit}</span>
+                                </strong>
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-dark-500 font-bold block uppercase tracking-wider">Zużycie</span>
+                                <strong className={`font-mono text-[10px] ${isPending ? 'text-emerald-400/70 italic font-medium' : 'text-emerald-400'}`}>
+                                  {consumption}
+                                </strong>
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-dark-500 font-bold block uppercase tracking-wider">Koszt Brutto</span>
+                                <strong className={`font-mono text-[10px] ${isPending ? 'text-green-400/70 italic font-medium' : 'text-green-400 font-bold'}`}>
+                                  {cost}
+                                </strong>
+                              </div>
+                              <div>
+                                <span className="text-[8px] text-dark-500 font-bold block uppercase tracking-wider mb-0.5">Status</span>
+                                <span className={`inline-flex px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${
+                                  isApproved 
+                                    ? 'bg-green-500/10 text-green-400 border border-green-500/20' 
+                                    : isPending 
+                                      ? 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20' 
+                                      : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                                }`}>
+                                  {isApproved ? "Zatwierdzony" : isPending ? "Oczekuje" : "Odrzucony"}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Row Actions */}
+                            <div className="flex items-center justify-between gap-2 pt-2 border-t border-dark-800/40 mt-0.5">
+                              <div className="flex gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingReading(h);
+                                    setEditValue(h.reading_value);
+                                  }}
+                                  className="py-1 px-2 bg-dark-950 hover:bg-dark-800 border border-dark-800 hover:border-brand-500/40 text-brand-400 hover:text-brand-300 rounded-lg text-[9px] font-bold transition-all flex items-center gap-0.5 cursor-pointer"
+                                  title="Modyfikuj stan licznika"
+                                >
+                                  <Edit className="w-3 h-3" />
+                                  Modyfikuj
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (window.confirm("Czy na pewno chcesz trwale usunąć ten odczyt z historii? Zostanie on usunięty z bazy w czasie rzeczywistym.")) {
+                                      deleteMeterReading(h.id);
+                                      setSuccessMsg("Odczyt licznika został pomyślnie usunięty!");
+                                      setMeters(getMeters().sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date)));
+                                      setTimeout(() => setSuccessMsg(""), 3000);
+                                    }
+                                  }}
+                                  className="py-1 px-2 bg-dark-950 hover:bg-red-500/10 border border-dark-800 hover:border-red-500/30 text-dark-500 hover:text-red-400 rounded-lg text-[9px] font-bold transition-all flex items-center gap-0.5 cursor-pointer"
+                                  title="Usuń odczyt"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  Usuń
+                                </button>
+                              </div>
+
+                              {isPending && (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => handleApprove(h.id)}
+                                    title="Zatwierdź odczyt"
+                                    className="py-1 px-1.5 bg-green-500/20 hover:bg-green-500 hover:text-white text-green-400 rounded-lg transition-all cursor-pointer font-bold text-[9px] flex items-center gap-0.5 shadow-md"
+                                  >
+                                    <Check className="w-3 h-3 font-black" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleReject(h.id)}
+                                    title="Odrzuć odczyt"
+                                    className="py-1 px-1.5 bg-red-500/20 hover:bg-red-500 hover:text-white text-red-400 rounded-lg transition-all cursor-pointer font-bold text-[9px] flex items-center gap-0.5 shadow-md"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
-                        ) : (
-                          <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
-                            isApproved 
-                              ? 'bg-green-500/10 text-green-400 border-green-500/20 shadow-sm shadow-green-950/20' 
-                              : 'bg-red-500/10 text-red-400 border-red-500/20'
-                          }`}>
-                            {isApproved ? "Zatwierdzony" : "Odrzucony"}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -744,6 +849,78 @@ export default function LandlordMeters({ landlordId }) {
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Edit Reading Modal Window */}
+      {editingReading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-950/80 backdrop-blur-md overflow-y-auto animate-fade-in font-sans">
+          <div className="glass max-w-sm w-full p-6 rounded-2xl border-brand-500/20 space-y-4 shadow-2xl relative text-left">
+            <button 
+              type="button"
+              onClick={() => setEditingReading(null)}
+              className="absolute top-4 right-4 p-1.5 bg-dark-900 hover:bg-dark-800 text-dark-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2 border-b border-dark-800 pb-3 text-brand-400">
+              <Edit className="w-4.5 h-4.5 text-brand-400" />
+              Modyfikacja Stanu Licznika
+            </h3>
+
+            <p className="text-xxs text-dark-400 leading-relaxed">
+              Modyfikujesz stan licznika dla nieruchomości: <strong className="text-white">{getPropertyById(editingReading.property_id)?.title.split(",")[0]}</strong>, medium: <strong className="text-white">{METER_TYPES[editingReading.meter_type]?.label || editingReading.meter_type}</strong>.
+            </p>
+
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!editValue || Number(editValue) <= 0) {
+                  alert("Wpisz poprawną wartość odczytu.");
+                  return;
+                }
+                try {
+                  updateMeterReadingValue(editingReading.id, editValue);
+                  setSuccessMsg("Stan licznika został pomyślnie zaktualizowany!");
+                  setEditingReading(null);
+                  setMeters(getMeters().sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date)));
+                  setTimeout(() => setSuccessMsg(""), 3000);
+                } catch (err) {
+                  alert("Błąd zapisu: " + err.message);
+                }
+              }} 
+              className="space-y-4 text-xs"
+            >
+              <div>
+                <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">
+                  Nowy Stan Odczytu ({METER_TYPES[editingReading.meter_type]?.unit || ""}) *
+                </label>
+                <input
+                  type="number" step="0.1" required
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  className="w-full bg-dark-950 border border-dark-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-brand-500 focus:outline-none font-bold font-mono"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingReading(null)}
+                  className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                >
+                  Anuluj
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                >
+                  Zapisz odczyt
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

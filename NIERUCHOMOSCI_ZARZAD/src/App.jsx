@@ -55,6 +55,9 @@ export default function App() {
       const newUser = switchSessionUser(userId);
       setCurrentUser(newUser);
       
+      // Force refresh user switcher to guarantee deduplication updates propagate
+      setAllUsers(getUsers());
+      
       // Trigger a beautiful visual alert of user role change
       setRoleSwitchedNotify(true);
       setTimeout(() => setRoleSwitchedNotify(false), 2500);

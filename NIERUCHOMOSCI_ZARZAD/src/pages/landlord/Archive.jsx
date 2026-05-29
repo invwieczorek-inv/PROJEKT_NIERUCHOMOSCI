@@ -7,7 +7,11 @@ import {
   deleteTenantNote, 
   getPropertyById, 
   getUserById,
-  getPaymentTimeliness 
+  getPaymentTimeliness,
+  updateTenantSummary,
+  getInvoicesForTenant,
+  getMessagesBetweenUsers,
+  deleteUser
 } from "../../utils/storage";
 import { 
   History, 
@@ -24,7 +28,11 @@ import {
   FileText, 
   CheckCircle,
   CreditCard,
-  Plus
+  Plus,
+  MessageSquare,
+  Download,
+  X,
+  CheckCheck
 } from "lucide-react";
 
 export default function LandlordArchive({ landlordId }) {
@@ -37,6 +45,10 @@ export default function LandlordArchive({ landlordId }) {
   const [noteContent, setNoteContent] = useState("");
   const [noteSearch, setNoteSearch] = useState("");
   const [showAddNote, setShowAddNote] = useState(false);
+
+  // Archived Chat States
+  const [archiveChatThread, setArchiveChatThread] = useState("Wszystkie");
+  const [activeLightbox, setActiveLightbox] = useState(null);
 
   // Success/Error notifications
   const [errorMsg, setErrorMsg] = useState("");
@@ -94,6 +106,135 @@ export default function LandlordArchive({ landlordId }) {
       .sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date));
   }, [tenant]);
 
+  // Chat history with this tenant
+  const tenantMessages = useMemo(() => {
+    if (!tenant) return [];
+    return getMessagesBetweenUsers(landlordId, tenant.id);
+  }, [tenant, landlordId]);
+
+  const filteredArchiveMessages = useMemo(() => {
+    if (archiveChatThread === "Wszystkie") {
+      return tenantMessages;
+    }
+    return tenantMessages.filter(m => m.subject === archiveChatThread);
+  }, [tenantMessages, archiveChatThread]);
+
+  // Build a unified, chronologically sorted activity/lease history
+  const unifiedTimeline = useMemo(() => {
+    if (!tenant) return [];
+    
+    let list = [];
+    
+    // 1. Add creation event
+    if (tenant.createdAt) {
+      list.push({
+        date: tenant.createdAt,
+        type: "creation",
+        title: "Utworzenie profilu",
+        desc: "Utworzono profil lokatora w systemie.",
+        colorClass: "bg-blue-500 border-blue-400 text-blue-450",
+        badge: "Profil"
+      });
+    }
+
+    // 2. Map all leaseHistory records into activation and deactivation events
+    if (tenant.leaseHistory && tenant.leaseHistory.length > 0) {
+      tenant.leaseHistory.forEach(lh => {
+        if (lh.leaseStart) {
+          list.push({
+            date: lh.leaseStart + "T12:00:00.000Z",
+            type: "activation",
+            title: "Rozpoczęcie najmu",
+            desc: `Rozpoczęcie najmu lokalu: ${lh.propertyTitle}`,
+            colorClass: "bg-green-500 border-green-400 text-green-400",
+            badge: "Najem",
+            leaseStart: lh.leaseStart,
+            leaseEnd: lh.leaseEnd,
+            propertyTitle: lh.propertyTitle
+          });
+        }
+        
+        list.push({
+          date: lh.archivedAt || (lh.leaseEnd ? lh.leaseEnd + "T23:59:59.000Z" : new Date().toISOString()),
+          type: "deactivation",
+          title: "Zakończenie najmu",
+          desc: `Zakończenie najmu lokalu: ${lh.propertyTitle} i przeniesienie do archiwum`,
+          colorClass: "bg-red-500 border-red-400 text-red-400",
+          badge: "Archiwum",
+          leaseStart: lh.leaseStart,
+          leaseEnd: lh.leaseEnd,
+          propertyTitle: lh.propertyTitle
+        });
+      });
+    }
+
+    // 3. Map any non-duplicate activity log entries
+    if (tenant.activityLog && tenant.activityLog.length > 0) {
+      tenant.activityLog.forEach(log => {
+        if (log.type === "creation") return; // skip profile creation since we added it
+        
+        // Skip activation/deactivation from activityLog if they are already represented in leaseHistory
+        const isLeaseRep = list.some(item => 
+          item.propertyTitle === log.propertyTitle && 
+          (item.leaseStart === log.leaseStart || new Date(item.date).toDateString() === new Date(log.date).toDateString())
+        );
+        if (isLeaseRep) return;
+
+        let typeTitle = "Zdarzenie";
+        let color = "bg-brand-500 border-brand-400 text-brand-350";
+        let badge = "Log";
+        
+        if (log.type === "activation") {
+          typeTitle = "Rozpoczęcie najmu";
+          color = "bg-green-500 border-green-400 text-green-400";
+          badge = "Najem";
+        } else if (log.type === "reactivation") {
+          typeTitle = "Przywrócenie (nowy najem)";
+          color = "bg-green-500 border-green-450 text-green-400";
+          badge = "Reaktywacja";
+        } else if (log.type === "deactivation") {
+          typeTitle = "Zakończenie najmu";
+          color = "bg-red-500 border-red-400 text-red-400";
+          badge = "Archiwum";
+        }
+
+        list.push({
+          date: log.date,
+          type: log.type,
+          title: typeTitle,
+          desc: log.description,
+          colorClass: color,
+          badge: badge,
+          leaseStart: log.leaseStart,
+          leaseEnd: log.leaseEnd,
+          propertyTitle: log.propertyTitle
+        });
+      });
+    }
+
+    // 4. Add current active lease if they are currently active
+    if (!tenant.isArchived && tenant.property_id) {
+      const activeProperty = getPropertyById(tenant.property_id);
+      if (activeProperty) {
+        list.push({
+          date: activeProperty.leaseStart ? activeProperty.leaseStart + "T12:00:00.000Z" : new Date().toISOString(),
+          type: "activation",
+          title: "Bieżący najem (Aktywny)",
+          desc: `Rozpoczęcie aktualnego najmu lokalu: ${activeProperty.title}`,
+          colorClass: "bg-emerald-500 border-emerald-450 text-emerald-400 font-bold",
+          badge: "Aktywny Najem",
+          leaseStart: activeProperty.leaseStart,
+          leaseEnd: activeProperty.leaseEnd,
+          propertyTitle: activeProperty.title,
+          isActive: true
+        });
+      }
+    }
+
+    // Sort descending (newest first)
+    return list.sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [tenant]);
+
   // Add structured note
   const handleAddNoteSubmit = (e) => {
     e.preventDefault();
@@ -130,6 +271,19 @@ export default function LandlordArchive({ landlordId }) {
       setTimeout(() => setSuccessMsg(""), 3000);
     } catch (err) {
       setErrorMsg(err.message);
+    }
+  };
+
+  // Completely delete user from database
+  const handleCompletelyDeleteTenant = (t) => {
+    if (!window.confirm(`⚠️ UWAGA: Czy na pewno chcesz TRWALE i CAŁKOWICIE usunąć lokatora ${t.name} z całej aplikacji?\n\nTa operacja usunie go bezpowrotnie z bazy (wraz z jego historią notatek i przypisań) i jest całkowicie nieodwracalna!`)) return;
+    try {
+      deleteUser(t.id);
+      setSuccessMsg(`Pomyślnie usunięto trwale lokatora ${t.name} z systemu!`);
+      setTimeout(() => setSuccessMsg(""), 3000);
+      setSelectedTenantId(""); // Reset active selected user
+    } catch (err) {
+      setErrorMsg("Błąd trwałego usuwania: " + err.message);
     }
   };
 
@@ -219,11 +373,18 @@ export default function LandlordArchive({ landlordId }) {
                           {t.name}
                         </div>
                         <div className="text-[10px] text-dark-500 truncate leading-none">{t.email}</div>
-                        {lastLease && (
-                          <div className="text-[9px] text-dark-400 truncate flex items-center gap-1 mt-1 bg-dark-950/50 px-1.5 py-0.5 rounded border border-dark-850 w-fit">
-                            🏠 {lastLease.propertyTitle.split(",")[0]}
-                          </div>
-                        )}
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {!t.isArchived && t.property_id && (
+                            <span className="text-[8px] text-green-400 font-bold bg-green-500/10 px-1.5 py-0.5 rounded border border-green-500/20">
+                              🟢 Aktywny
+                            </span>
+                          )}
+                          {lastLease && (
+                            <span className="text-[8px] text-dark-400 bg-dark-950/50 px-1.5 py-0.5 rounded border border-dark-850">
+                              🏠 {lastLease.propertyTitle.split(",")[0]}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <ChevronRight className={`w-4 h-4 shrink-0 transition-transform ${isSelected ? 'text-brand-400 translate-x-0.5' : 'text-dark-500'}`} />
                     </button>
@@ -244,15 +405,34 @@ export default function LandlordArchive({ landlordId }) {
                     <User className="w-24 h-24 stroke-[1.5]" />
                   </div>
 
-                  <div className="flex flex-wrap gap-2 items-center">
-                    <span className="bg-brand-500/10 text-brand-400 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border border-brand-500/20">
-                      🔒 Zarchiwizowany
-                    </span>
-                    {tenant.leaseHistory && tenant.leaseHistory.length > 0 && (
-                      <span className="bg-dark-950 border border-dark-850 text-dark-400 text-[9px] font-mono px-2 py-0.5 rounded-full">
-                        Zarchiwizowano: {new Date(tenant.leaseHistory[tenant.leaseHistory.length - 1].archivedAt).toLocaleDateString('pl-PL')}
-                      </span>
-                    )}
+                  <div className="flex justify-between items-start gap-4">
+                    <div className="flex flex-wrap gap-2 items-center">
+                      {tenant.isArchived ? (
+                        <span className="bg-brand-500/10 text-brand-400 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border border-brand-500/20">
+                          🔒 Zarchiwizowany
+                        </span>
+                      ) : (
+                        <span className="bg-green-500/15 text-green-400 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border border-green-500/20">
+                          🟢 Aktywny najem
+                        </span>
+                      )}
+                      {tenant.leaseHistory && tenant.leaseHistory.length > 0 && tenant.isArchived && (
+                        <span className="bg-dark-950 border border-dark-850 text-dark-400 text-[9px] font-mono px-2 py-0.5 rounded-full">
+                          Zarchiwizowano: {new Date(tenant.leaseHistory[tenant.leaseHistory.length - 1].archivedAt).toLocaleDateString('pl-PL')}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* Permanent deletion button inside archive */}
+                    <button
+                      type="button"
+                      onClick={() => handleCompletelyDeleteTenant(tenant)}
+                      className="py-1.5 px-3 bg-red-950/30 hover:bg-red-900/40 border border-red-500/20 hover:border-red-500/40 text-red-400 hover:text-red-300 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-lg hover:shadow-red-500/5"
+                      title="Usuń trwale z bazy danych"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Trwałe Usunięcie
+                    </button>
                   </div>
 
                   <div className="space-y-1">
@@ -288,30 +468,43 @@ export default function LandlordArchive({ landlordId }) {
                     Przebieg Najmu i Historia Kontraktów
                   </h3>
 
-                  {!tenant.leaseHistory || tenant.leaseHistory.length === 0 ? (
-                    <p className="text-xxs text-dark-500 italic py-2">Brak archiwalnych umów najmu w kartotece timeline.</p>
+                  {unifiedTimeline.length === 0 ? (
+                    <p className="text-xxs text-dark-500 italic py-2">Brak umów najmu ani zdarzeń w kartotece timeline.</p>
                   ) : (
                     <div className="relative border-l border-dark-800 pl-5 ml-2.5 space-y-5 py-1">
-                      {tenant.leaseHistory.map((lh, idx) => (
-                        <div key={idx} className="relative space-y-1">
-                          {/* Timeline dot */}
-                          <span className="absolute -left-[26px] top-1 flex h-3 w-3 items-center justify-center rounded-full bg-brand-500/20 border border-brand-400">
-                            <span className="h-1.5 w-1.5 rounded-full bg-brand-400"></span>
-                          </span>
-                          
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                            <span className="text-xs font-bold text-white">{lh.propertyTitle}</span>
-                            <span className="text-[10px] text-dark-500 font-mono bg-dark-900 px-2 py-0.5 rounded border border-dark-800">
-                              {lh.leaseStart} &rarr; {lh.leaseEnd}
+                      {unifiedTimeline.map((item, idx) => {
+                        const isCurrentActive = item.isActive;
+                        return (
+                          <div key={idx} className="relative space-y-1">
+                            {/* Timeline dot */}
+                            <span className={`absolute -left-[26px] top-1 flex h-3 w-3 items-center justify-center rounded-full ${isCurrentActive ? 'bg-green-500/20 border-green-400' : 'bg-brand-500/20 border-brand-400'}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${isCurrentActive ? 'bg-green-400 animate-ping' : 'bg-brand-400'}`}></span>
                             </span>
+                            
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                              <span className={`text-xs font-bold ${isCurrentActive ? 'text-green-400' : 'text-white'}`}>
+                                {item.title}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider ${isCurrentActive ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-dark-900 border-dark-800 text-dark-400'}`}>
+                                  {item.badge}
+                                </span>
+                                <span className="text-[10px] text-dark-500 font-mono">
+                                  {new Date(item.date).toLocaleDateString('pl-PL')}
+                                </span>
+                              </div>
+                            </div>
+                            
+                            <p className="text-[10px] text-dark-400 leading-relaxed">{item.desc}</p>
+                            
+                            {item.leaseStart && (
+                              <div className="text-[9px] text-dark-500 font-mono mt-1">
+                                Okres kontraktu: <strong className="text-dark-300">{item.leaseStart}</strong> &rarr; <strong className="text-dark-300">{item.leaseEnd || "bezterminowo"}</strong>
+                              </div>
+                            )}
                           </div>
-                          
-                          <p className="text-[10px] text-dark-400">{lh.address}, {lh.city}</p>
-                          <div className="text-[10px] text-brand-300 font-medium">
-                            Czynsz podstawowy najmu: <strong className="text-white">{lh.rentAmount} PLN</strong>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -428,6 +621,121 @@ export default function LandlordArchive({ landlordId }) {
                   )}
                 </div>
 
+                {/* Archived Chat History Card */}
+                <div className="glass p-6 rounded-2xl border-brand-500/10 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-dark-800 pb-3 gap-2">
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-1.5 font-sans">
+                      <MessageSquare className="w-4.5 h-4.5 text-brand-400" />
+                      Archiwum Konwersacji i Rozmów Czatu ({tenantMessages.length} wiadomości)
+                    </h3>
+                    
+                    {/* Thread Selector Tabs */}
+                    {tenantMessages.length > 0 && (
+                      <div className="flex bg-dark-900/60 p-1 rounded-xl border border-dark-800 gap-1 text-[9px] font-bold">
+                        {["Wszystkie", "Usterki", "Rozliczenia", "Ogólne"].map((t) => {
+                          const isActive = archiveChatThread === t;
+                          const label = t === "Wszystkie" ? "📦 Wszystkie" : t === "Usterki" ? "🛠️ Usterki" : t === "Rozliczenia" ? "💰 Opłaty" : "💬 Ogólne";
+                          return (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => setArchiveChatThread(t)}
+                              className={`px-2 py-1 rounded-lg transition-all ${
+                                isActive 
+                                  ? "bg-dark-800 text-brand-300 font-extrabold border border-brand-500/20" 
+                                  : "text-dark-400 hover:text-white"
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {tenantMessages.length === 0 ? (
+                    <p className="text-xxs text-dark-500 italic text-center py-6 bg-dark-900/20 rounded-xl border border-dark-800">
+                      Brak historii rozmów czatu z tym najemcą w bazie.
+                    </p>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Read-Only Scrollable Chat panel */}
+                      <div className="bg-dark-950/40 rounded-xl border border-dark-850 p-4 max-h-[350px] overflow-y-auto space-y-3.5 custom-scrollbar">
+                        {filteredArchiveMessages.length === 0 ? (
+                          <div className="text-center text-dark-500 text-xxs py-10">
+                            Brak wiadomości w wybranym wątku: <strong className="text-dark-300">{archiveChatThread}</strong>
+                          </div>
+                        ) : (
+                          filteredArchiveMessages.map((m) => {
+                            const isMe = m.sender_id === landlordId || m.sender_id === "u1";
+                            return (
+                              <div key={m.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-xs shadow-md transition-all ${
+                                  isMe 
+                                    ? 'bg-brand-600/90 text-white rounded-tr-none' 
+                                    : 'bg-dark-800 text-dark-100 border border-dark-700/50 rounded-tl-none'
+                                }`}>
+                                  {/* Subject Tag in chronological flow */}
+                                  {archiveChatThread === "Wszystkie" && (
+                                    <span className="text-[8px] opacity-60 font-bold uppercase tracking-wider block mb-1">
+                                      {m.subject === "Usterki" ? "🛠️ Usterki" : m.subject === "Rozliczenia" ? "💰 Opłaty" : "💬 Ogólne"}
+                                    </span>
+                                  )}
+                                  
+                                  {m.text && <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>}
+                                  
+                                  {m.attachment_data && (
+                                    <div 
+                                      className={`mt-2 rounded-xl overflow-hidden border ${
+                                        isMe ? 'border-brand-500/30' : 'border-dark-700'
+                                      } bg-dark-950/40 cursor-pointer group relative max-w-xs`}
+                                      onClick={() => setActiveLightbox(m)}
+                                    >
+                                      <img 
+                                        src={m.attachment_data} 
+                                        alt={m.attachment_name || "Załącznik"} 
+                                        className="max-w-full max-h-40 object-cover rounded-xl transition-all duration-300 group-hover:scale-[1.02] group-hover:brightness-110" 
+                                      />
+                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-[10px] text-white font-medium">
+                                        Powiększ
+                                      </div>
+                                    </div>
+                                  )}
+                                  
+                                  <div className="flex items-center justify-end gap-1 mt-1 text-[8px] opacity-60">
+                                    <span>
+                                      {new Date(m.timestamp).toLocaleDateString('pl-PL')} o {new Date(m.timestamp).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    {isMe && <CheckCheck className="w-2.5 h-2.5 text-white" />}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-1.5 text-[9px] text-dark-500 bg-dark-900/30 p-2 rounded-xl border border-dark-850">
+                        <span className="flex h-1.5 w-1.5 relative">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-brand-500"></span>
+                        </span>
+                        <span>Konwersacja zarchiwizowana (tylko do odczytu). Pełna historia została zabezpieczona w LocalStorage.</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Final Summary Card */}
+                <div className="glass p-6 rounded-2xl border-brand-500/10 space-y-4 shadow-xl">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-1.5 font-sans border-b border-dark-800 pb-3">
+                    <FileText className="w-4.5 h-4.5 text-brand-400" />
+                    Podsumowanie Końcowe Lokatora
+                  </h3>
+                  <TenantFinalSummarySection tenant={tenant} />
+                </div>
+
                 {/* Structured Notes Search Section */}
                 <div className="glass p-6 rounded-2xl border-brand-500/10 space-y-4">
                   <div className="flex items-center justify-between border-b border-dark-800 pb-3">
@@ -525,6 +833,212 @@ export default function LandlordArchive({ landlordId }) {
             )}
           </div>
 
+        </div>
+      )}
+
+      {/* Lightbox Modal */}
+      {activeLightbox && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md transition-all duration-300"
+          onClick={() => setActiveLightbox(null)}
+        >
+          <div 
+            className="relative max-w-5xl w-full max-h-[90vh] flex flex-col items-center justify-center transition-all transform duration-300 scale-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header / Actions */}
+            <div className="absolute top-[-48px] right-0 flex items-center gap-3 text-white">
+              <span className="text-xs font-mono bg-dark-900/80 px-3 py-1.5 rounded-full border border-dark-800 truncate max-w-[200px] md:max-w-[350px]">
+                {activeLightbox.attachment_name || "Zrzut ekranu"}
+              </span>
+              <a
+                href={activeLightbox.attachment_data}
+                download={activeLightbox.attachment_name || "rentportal_zrzut.jpg"}
+                className="p-2 bg-dark-900/80 hover:bg-brand-600 text-dark-300 hover:text-white rounded-xl transition-all border border-dark-800"
+                title="Pobierz plik"
+              >
+                <Download className="w-4 h-4" />
+              </a>
+              <button
+                onClick={() => setActiveLightbox(null)}
+                className="p-2 bg-dark-900/80 hover:bg-red-600 text-dark-300 hover:text-white rounded-xl transition-all border border-dark-800"
+                title="Zamknij"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Image display */}
+            <div className="w-full h-full flex items-center justify-center rounded-2xl overflow-hidden border border-dark-800 bg-dark-950/80 shadow-2xl">
+              <img 
+                src={activeLightbox.attachment_data} 
+                alt={activeLightbox.attachment_name || "Załącznik w pełnym oknie"} 
+                className="max-w-full max-h-[75vh] object-contain select-none rounded-xl"
+              />
+            </div>
+            
+            {activeLightbox.text && (
+              <div className="mt-3 bg-dark-900/90 border border-dark-800 text-dark-100 rounded-2xl px-5 py-3 text-sm max-w-2xl text-center shadow-lg whitespace-pre-wrap leading-relaxed">
+                {activeLightbox.text}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function generateDraftSummary(tenant) {
+  const notesCount = (tenant.notes || []).length;
+  const noteTopics = (tenant.notes || []).map(n => `"${n.title}"`).join(", ");
+  
+  const invoices = getInvoicesForTenant(tenant.id) || [];
+  const totalInvoices = invoices.length;
+  
+  let timelinessText = "Brak zarejestrowanej historii płatności.";
+  if (totalInvoices > 0) {
+    const latePayments = invoices.filter(i => {
+      if (i.status !== "paid" || !i.paymentDate || !i.dueDate) return false;
+      return new Date(i.paymentDate) > new Date(i.dueDate);
+    }).length;
+    
+    if (latePayments === 0) {
+      timelinessText = "Płatności były regulowane w 100% terminowo i rzetelnie.";
+    } else {
+      timelinessText = `Regulowanie opłat z opóźnieniami (${latePayments} opóźnionych płatności na ${totalInvoices} faktur).`;
+    }
+  }
+
+  let notesText = "Brak odnotowanych uwag lub incydentów w rejestrze notatek.";
+  if (notesCount > 0) {
+    notesText = `W trakcie najmu sporządzono ${notesCount} notatek (dotyczących m.in.: ${noteTopics}).\n`;
+    const contentSummaries = (tenant.notes || []).map(n => `- ${n.title}: ${n.content.slice(0, 80)}${n.content.length > 80 ? '...' : ''}`).join("\n");
+    notesText += `Szczegóły zdarzeń:\n${contentSummaries}`;
+  }
+
+  return `PODSUMOWANIE LOKATORA: ${tenant.name.toUpperCase()}
+
+1. RZETELNOŚĆ I TERMINOWOŚĆ FINANSOWA:
+${timelinessText}
+
+2. ZACHOWANIE I RELACJE (NA PODSTAWIE NOTATEK):
+${notesText}
+
+3. SPOSÓB ROZWIĄZYWANIA KONFLIKTÓW I CECHY OSOBISTE:
+Lokator w komunikacji jest... [opisz np. ugodowy / wymagający / bezkonfliktowy]. Wszelkie usterki zgłaszał...
+
+4. REKOMENDACJA KOŃCOWA:
+[Wpisz np. Zdecydowanie polecam tego najemcę kolejnym wynajmującym. / Najemca poprawny, ale wymagał dyscyplinowania płatniczego.]`;
+}
+
+function TenantFinalSummarySection({ tenant }) {
+  const [summary, setSummary] = useState(tenant.finalSummary || "");
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+
+  useEffect(() => {
+    setSummary(tenant.finalSummary || "");
+  }, [tenant.finalSummary]);
+
+  const handleSave = () => {
+    try {
+      updateTenantSummary(tenant.id, summary);
+      setIsSaved(true);
+      setIsEditing(false);
+      setTimeout(() => setIsSaved(false), 2000);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleGenerate = () => {
+    if (summary && !window.confirm("Czy chcesz zastąpić obecną treść automatycznie wygenerowanym szkicem podsumowania na podstawie notatek i historii wpłat?")) {
+      return;
+    }
+    const draft = generateDraftSummary(tenant);
+    setSummary(draft);
+    setIsEditing(true);
+  };
+
+  return (
+    <div className="space-y-3 font-sans text-xs">
+      <div className="flex items-center justify-between">
+        <span className="text-dark-400 text-xxs font-bold uppercase tracking-wider block">
+          Pokaż Charakterystykę i Rekomendację lokatora
+        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={handleGenerate}
+            className="text-brand-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-0.5 bg-brand-500/10 px-2 py-0.5 rounded transition-all cursor-pointer border border-brand-500/20"
+            title="Szkicuj podsumowanie z notatek i historii rozliczeń"
+          >
+            ✨ Generuj Szkic
+          </button>
+          {!isEditing ? (
+            <button
+              type="button"
+              onClick={() => setIsEditing(true)}
+              className="text-brand-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 bg-brand-500/10 px-2 py-0.5 rounded transition-all cursor-pointer border border-brand-500/20"
+            >
+              Edytuj
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSave}
+              className="text-green-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 bg-green-500/20 px-2 py-0.5 rounded transition-all cursor-pointer border border-green-500/25"
+            >
+              Zapisz
+            </button>
+          )}
+        </div>
+      </div>
+
+      {isEditing ? (
+        <div className="space-y-2 animate-fade-in text-xs">
+          <textarea
+            rows="6"
+            className="w-full bg-dark-950 border border-dark-800 focus:border-brand-500 rounded-xl p-3 text-xxs text-white focus:outline-none placeholder-dark-500 leading-normal"
+            placeholder="Wpisz podsumowanie końcowe, cechy lokatora, rzetelność, komunikację..."
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSummary(tenant.finalSummary || "");
+                setIsEditing(false);
+              }}
+              className="px-2.5 py-1 bg-dark-900 border border-dark-800 hover:bg-dark-800 text-white rounded text-[10px] transition-all cursor-pointer"
+            >
+              Anuluj
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="px-2.5 py-1 bg-brand-600 hover:bg-brand-500 text-white rounded text-[10px] font-bold transition-all cursor-pointer"
+            >
+              Zapisz podsumowanie
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-dark-950/40 rounded-xl border border-dark-850 p-3 text-xxs text-dark-300 leading-relaxed relative min-h-[50px] flex items-center justify-center">
+          {summary ? (
+            <p className="whitespace-pre-wrap w-full text-left">{summary}</p>
+          ) : (
+            <p className="text-dark-500 italic text-center py-1">
+              Brak sporządzonego podsumowania końcowego najemcy.
+            </p>
+          )}
+          {isSaved && (
+            <span className="absolute top-2 right-2 text-[8px] bg-green-500/20 border border-green-500/30 text-green-400 px-1.5 py-0.5 rounded animate-fade-in font-bold">
+              Zapisano!
+            </span>
+          )}
         </div>
       )}
     </div>

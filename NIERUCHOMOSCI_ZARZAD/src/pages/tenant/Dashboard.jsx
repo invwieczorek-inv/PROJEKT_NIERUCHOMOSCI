@@ -208,6 +208,27 @@ export default function TenantDashboard({ activeUser }) {
                     })()}
                   </div>
                 )}
+                {property.earlyTermination && (
+                  <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 p-3 rounded-xl text-xxs mt-2 space-y-1 text-left w-full font-sans">
+                    <strong className="block text-amber-400">⚠️ Umowa rozwiązana przed czasem!</strong>
+                    <div className="text-[10px] text-dark-300">
+                      Data rozwiązania: <strong>{property.earlyTermination.terminationDate}</strong>
+                    </div>
+                    {(() => {
+                      const endDate = new Date(property.leaseEnd);
+                      const termDate = new Date(property.earlyTermination.terminationDate);
+                      const diff = Math.ceil((endDate - termDate) / (1000 * 60 * 60 * 24));
+                      return (
+                        <div className="text-[10px] text-amber-200">
+                          Rozwiązano przed czasem o: <strong>{diff} dni</strong>
+                        </div>
+                      );
+                    })()}
+                    <div className="text-[10px] text-amber-200">
+                      Naliczona kara umowna: <strong className="text-red-400 font-bold">{parseFloat(property.earlyTermination.penaltyAmount).toFixed(2)} PLN</strong>
+                    </div>
+                  </div>
+                )}
                 <button 
                   onClick={() => setActiveTab("messages")}
                   className="w-full mt-2 py-2 px-4 bg-dark-900 border border-dark-800 hover:border-brand-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"

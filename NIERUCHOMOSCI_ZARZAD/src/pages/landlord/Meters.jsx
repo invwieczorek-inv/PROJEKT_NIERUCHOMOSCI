@@ -28,6 +28,8 @@ export default function LandlordMeters({ landlordId }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingReading, setEditingReading] = useState(null);
   const [editValue, setEditValue] = useState("");
+  const [modalError, setModalError] = useState("");
+  const [inlineValues, setInlineValues] = useState({});
   const [properties, setProperties] = useState([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState("");
   const [selectedMeterType, setSelectedMeterType] = useState("electricity");
@@ -163,6 +165,61 @@ export default function LandlordMeters({ landlordId }) {
     }
   };
 
+  const handleInlineSubmit = (e, propId) => {
+    e.preventDefault();
+    setErrorMsg("");
+    setSuccessMsg("");
+
+    const data = inlineValues[propId];
+    const medium = data?.type || "electricity";
+    const val = data?.val;
+    const date = data?.date || new Date().toISOString().split("T")[0];
+
+    if (val === undefined || val === "" || Number(val) < 0) {
+      setErrorMsg("Wpisz poprawną wartość odczytu.");
+      return;
+    }
+
+    // Auto-detect serial number
+    let sn = "";
+    const readings = meters.filter(m => m.property_id === propId && m.meter_type === medium);
+    if (readings.length > 0) {
+      sn = readings[0].meter_number || "";
+    } else {
+      if (medium === "electricity") sn = "L-EL-9901";
+      else if (medium === "gas") sn = "G-GZ-5502";
+      else if (medium === "water_cold") sn = "W-WC-1103";
+      else if (medium === "water_hot") sn = "W-WH-1104";
+      else if (medium === "heating") sn = "H-HT-3305";
+    }
+
+    try {
+      addMeterReading({
+        property_id: propId,
+        meter_type: medium,
+        meter_number: sn,
+        reading_value: Number(val),
+        reading_date: date,
+        reported_by_id: landlordId,
+        status: "approved"
+      });
+
+      // Clear state
+      setInlineValues(prev => ({
+        ...prev,
+        [propId]: { ...prev[propId], val: "" }
+      }));
+      setSuccessMsg("Szybki odczyt licznika został pomyślnie dodany!");
+      setMeters(getMeters().sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date)));
+      setTimeout(() => setSuccessMsg(""), 3500);
+
+      // Force dispatch sync event
+      window.dispatchEvent(new Event("rentportal_meters_updated"));
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
+  };
+
   const handleRateChange = (medium, field, value) => {
     setRates(prev => ({
       ...prev,
@@ -175,9 +232,15 @@ export default function LandlordMeters({ landlordId }) {
 
   const handleSaveRates = (e) => {
     e.preventDefault();
-    localStorage.setItem("rentportal_meter_rates", JSON.stringify(rates));
-    setSuccessMsg("Stawki składowe mediów zostały pomyślnie zapisane!");
-    setTimeout(() => setSuccessMsg(""), 3500);
+    setErrorMsg("");
+    setSuccessMsg("");
+    try {
+      localStorage.setItem("rentportal_meter_rates", JSON.stringify(rates));
+      setSuccessMsg("Stawki składowe mediów zostały pomyślnie zapisane!");
+      setTimeout(() => setSuccessMsg(""), 3500);
+    } catch (err) {
+      setErrorMsg("Błąd zapisu stawek: " + err.message);
+    }
   };
 
   const calculateReadingCost = (item) => {
@@ -542,6 +605,75 @@ export default function LandlordMeters({ landlordId }) {
                       })
                     )}
                   </div>
+
+                  {/* Inline Quick Add Form */}
+                  <form 
+                    onSubmit={(e) => handleInlineSubmit(e, p.id)}
+                    className="border-t border-dark-800/60 pt-3.5 mt-3 space-y-2 text-left font-sans"
+                  >
+                    <span className="text-[9px] font-bold text-brand-300 uppercase tracking-wider block">
+                      ⚡ Szybki wpis odczytu:
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <select
+                          value={inlineValues[p.id]?.type || "electricity"}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setInlineValues(prev => ({
+                              ...prev,
+                              [p.id]: { ...(prev[p.id] || { type: "electricity", val: "", date: new Date().toISOString().split("T")[0] }), type: val }
+                            }));
+                          }}
+                          className="w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-1 text-[10px] text-white focus:outline-none focus:border-brand-500 cursor-pointer"
+                        >
+                          {Object.keys(METER_TYPES).map(k => (
+                            <option key={k} value={k}>{METER_TYPES[k].label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <input
+                          type="number"
+                          step="0.1"
+                          required
+                          placeholder="Stan licznika"
+                          value={inlineValues[p.id]?.val || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setInlineValues(prev => ({
+                              ...prev,
+                              [p.id]: { ...(prev[p.id] || { type: "electricity", val: "", date: new Date().toISOString().split("T")[0] }), val }
+                            }));
+                          }}
+                          className="w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-1 text-[10px] text-white focus:outline-none focus:border-brand-500 font-mono"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 items-center">
+                      <div>
+                        <input
+                          type="date"
+                          required
+                          value={inlineValues[p.id]?.date || new Date().toISOString().split("T")[0]}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setInlineValues(prev => ({
+                              ...prev,
+                              [p.id]: { ...(prev[p.id] || { type: "electricity", val: "", date: new Date().toISOString().split("T")[0] }), date: val }
+                            }));
+                          }}
+                          className="w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-0.5 text-[10px] text-white focus:outline-none focus:border-brand-500 font-mono cursor-pointer"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        className="py-1 px-3 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer shadow-md shadow-brand-950/20"
+                      >
+                        <Plus className="w-3 h-3" /> Dodaj
+                      </button>
+                    </div>
+                  </form>
                 </div>
               </div>
             ))}
@@ -859,7 +991,7 @@ export default function LandlordMeters({ landlordId }) {
           <div className="glass max-w-sm w-full p-6 rounded-2xl border-brand-500/20 space-y-4 shadow-2xl relative text-left">
             <button 
               type="button"
-              onClick={() => setEditingReading(null)}
+              onClick={() => { setEditingReading(null); setModalError(""); }}
               className="absolute top-4 right-4 p-1.5 bg-dark-900 hover:bg-dark-800 text-dark-400 hover:text-white rounded-lg transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
@@ -874,11 +1006,19 @@ export default function LandlordMeters({ landlordId }) {
               Modyfikujesz stan licznika dla nieruchomości: <strong className="text-white">{getPropertyById(editingReading.property_id)?.title.split(",")[0]}</strong>, medium: <strong className="text-white">{METER_TYPES[editingReading.meter_type]?.label || editingReading.meter_type}</strong>.
             </p>
 
+            {modalError && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl p-3 text-xxs flex items-start gap-2 animate-fade-in">
+                <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{modalError}</span>
+              </div>
+            )}
+
             <form 
               onSubmit={(e) => {
                 e.preventDefault();
+                setModalError("");
                 if (!editValue || Number(editValue) <= 0) {
-                  alert("Wpisz poprawną wartość odczytu.");
+                  setModalError("Wpisz poprawną wartość odczytu.");
                   return;
                 }
                 try {
@@ -888,7 +1028,7 @@ export default function LandlordMeters({ landlordId }) {
                   setMeters(getMeters().sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date)));
                   setTimeout(() => setSuccessMsg(""), 3000);
                 } catch (err) {
-                  alert("Błąd zapisu: " + err.message);
+                  setModalError("Błąd zapisu: " + err.message);
                 }
               }} 
               className="space-y-4 text-xs"
@@ -908,7 +1048,7 @@ export default function LandlordMeters({ landlordId }) {
               <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
                 <button
                   type="button"
-                  onClick={() => setEditingReading(null)}
+                  onClick={() => { setEditingReading(null); setModalError(""); }}
                   className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
                 >
                   Anuluj

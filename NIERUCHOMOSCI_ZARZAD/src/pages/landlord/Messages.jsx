@@ -15,7 +15,8 @@ import {
   Image, 
   Paperclip, 
   X, 
-  Download 
+  Download,
+  XCircle
 } from "lucide-react";
 
 const THREADS = [
@@ -35,6 +36,7 @@ export default function LandlordMessages({ landlordId }) {
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedImageName, setSelectedImageName] = useState("");
   const [activeLightbox, setActiveLightbox] = useState(null);
+  const [errorMsg, setErrorMsg] = useState("");
   
   const fileInputRef = useRef(null);
   const chatEndRef = useRef(null);
@@ -83,49 +85,64 @@ export default function LandlordMessages({ landlordId }) {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    setErrorMsg("");
 
     // Validate if file is an image
     const isImg = file.type.startsWith("image/") || /\.(jpg|jpeg|png|webp|gif)$/i.test(file.name);
     if (!isImg) {
-      alert("Wybrany plik nie jest obsługiwanym formatem obrazu (PNG, JPG, WEBP, GIF).");
+      setErrorMsg("Wybrany plik nie jest obsługiwanym formatem obrazu (PNG, JPG, WEBP, GIF).");
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = new window.Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        const MAX_WIDTH = 800;
-        const MAX_HEIGHT = 800;
-        let width = img.width;
-        let height = img.height;
+    try {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new window.Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            const MAX_WIDTH = 800;
+            const MAX_HEIGHT = 800;
+            let width = img.width;
+            let height = img.height;
 
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height = Math.round((height * MAX_WIDTH) / width);
-            width = MAX_WIDTH;
+            if (width > height) {
+              if (width > MAX_WIDTH) {
+                height = Math.round((height * MAX_WIDTH) / width);
+                width = MAX_WIDTH;
+              }
+            } else {
+              if (height > MAX_HEIGHT) {
+                width = Math.round((width * MAX_HEIGHT) / height);
+                height = MAX_HEIGHT;
+              }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // Compress to JPEG at 0.6 quality to prevent LocalStorage QuotaExceededError
+            const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.6);
+            setSelectedImage(compressedDataUrl);
+            setSelectedImageName(file.name);
+          } catch (canvasErr) {
+            setErrorMsg("Błąd kompresji obrazu: " + canvasErr.message);
           }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width = Math.round((width * MAX_HEIGHT) / height);
-            height = MAX_HEIGHT;
-          }
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, width, height);
-
-        // Compress to JPEG at 0.6 quality to prevent LocalStorage QuotaExceededError
-        const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.6);
-        setSelectedImage(compressedDataUrl);
-        setSelectedImageName(file.name);
+        };
+        img.onerror = () => {
+          setErrorMsg("Błąd ładowania pliku graficznego.");
+        };
+        img.src = event.target.result;
       };
-      img.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
+      reader.onerror = () => {
+        setErrorMsg("Błąd odczytu pliku z dysku.");
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      setErrorMsg("Błąd wczytywania załącznika: " + err.message);
+    }
     
     // Clear value to allow re-uploading same file
     e.target.value = "";
@@ -133,22 +150,27 @@ export default function LandlordMessages({ landlordId }) {
 
   const handleSend = (e) => {
     e.preventDefault();
+    setErrorMsg("");
     if ((!inputMsg.trim() && !selectedImage) || !selectedTenant || !selectedProperty) return;
 
-    const newMsg = sendMessage({
-      sender_id: landlordId,
-      receiver_id: selectedTenant.id,
-      property_id: selectedProperty.id,
-      subject: activeThread,
-      text: inputMsg.trim(),
-      attachment_name: selectedImageName || null,
-      attachment_data: selectedImage || null
-    });
+    try {
+      const newMsg = sendMessage({
+        sender_id: landlordId,
+        receiver_id: selectedTenant.id,
+        property_id: selectedProperty.id,
+        subject: activeThread,
+        text: inputMsg.trim(),
+        attachment_name: selectedImageName || null,
+        attachment_data: selectedImage || null
+      });
 
-    setMessages(prev => [...prev, newMsg]);
-    setInputMsg("");
-    setSelectedImage(null);
-    setSelectedImageName("");
+      setMessages(prev => [...prev, newMsg]);
+      setInputMsg("");
+      setSelectedImage(null);
+      setSelectedImageName("");
+    } catch (err) {
+      setErrorMsg("Błąd wysyłania: " + err.message + ". Pamięć przeglądarki może być przepełniona.");
+    }
   };
 
   return (
@@ -317,6 +339,22 @@ export default function LandlordMessages({ landlordId }) {
                     title="Usuń załącznik"
                   >
                     <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {errorMsg && (
+                <div className="bg-red-500/10 border-t border-red-500/20 text-red-400 px-5 py-2 text-xxs flex items-center justify-between gap-4 animate-fade-in font-sans">
+                  <div className="flex items-center gap-2">
+                    <XCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{errorMsg}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setErrorMsg("")}
+                    className="text-dark-400 hover:text-white transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               )}

@@ -24,6 +24,7 @@ import {
   Sparkles, 
   ArrowRight,
   CheckCircle,
+  XCircle,
   X,
   Calendar,
   History
@@ -47,6 +48,7 @@ export default function LandlordDashboard({ activeUser }) {
   const [adminFeesValues, setAdminFeesValues] = useState({});
   const [occupiedProperties, setOccupiedProperties] = useState([]);
   const [successToast, setSuccessToast] = useState("");
+  const [errorToast, setErrorToast] = useState("");
 
   // Landlord Profile States
   const [profileName, setProfileName] = useState(activeUser.name || "");
@@ -73,7 +75,8 @@ export default function LandlordDashboard({ activeUser }) {
       setSuccessToast("Profil zarządcy został zaktualizowany!");
       setTimeout(() => setSuccessToast(""), 3000);
     } catch (err) {
-      alert("Błąd aktualizacji profilu: " + err.message);
+      setErrorToast("Błąd aktualizacji profilu: " + err.message);
+      setTimeout(() => setErrorToast(""), 3500);
     }
   };
 
@@ -139,28 +142,32 @@ export default function LandlordDashboard({ activeUser }) {
 
   const handleSaveAdminFees = (e) => {
     e.preventDefault();
-    
-    const existingFees = JSON.parse(localStorage.getItem("rentportal_pending_admin_fees") || "{}");
-    const updatedFees = { ...existingFees };
-    
-    Object.keys(adminFeesValues).forEach(propId => {
-      const val = adminFeesValues[propId];
-      if (val !== "" && Number(val) > 0) {
-        updatedFees[propId] = {
-          amount: Number(val),
-          month: adminFeesMonth
-        };
-      } else {
-        delete updatedFees[propId];
-      }
-    });
+    try {
+      const existingFees = JSON.parse(localStorage.getItem("rentportal_pending_admin_fees") || "{}");
+      const updatedFees = { ...existingFees };
+      
+      Object.keys(adminFeesValues).forEach(propId => {
+        const val = adminFeesValues[propId];
+        if (val !== "" && Number(val) > 0) {
+          updatedFees[propId] = {
+            amount: Number(val),
+            month: adminFeesMonth
+          };
+        } else {
+          delete updatedFees[propId];
+        }
+      });
 
-    localStorage.setItem("rentportal_pending_admin_fees", JSON.stringify(updatedFees));
-    window.dispatchEvent(new Event("rentportal_admin_fees_updated"));
-    
-    setShowAdminFeesModal(false);
-    setSuccessToast("Opłaty administracyjne zostały pomyślnie zaktualizowane!");
-    setTimeout(() => setSuccessToast(""), 3000);
+      localStorage.setItem("rentportal_pending_admin_fees", JSON.stringify(updatedFees));
+      window.dispatchEvent(new Event("rentportal_admin_fees_updated"));
+      
+      setShowAdminFeesModal(false);
+      setSuccessToast("Opłaty administracyjne zostały pomyślnie zaktualizowane!");
+      setTimeout(() => setSuccessToast(""), 3000);
+    } catch (err) {
+      setErrorToast("Błąd zapisu opłat: " + err.message);
+      setTimeout(() => setErrorToast(""), 3500);
+    }
   };
 
   const handleAdminFeeChange = (propId, val) => {
@@ -261,6 +268,165 @@ export default function LandlordDashboard({ activeUser }) {
           </div>
 
         </div>
+
+        {/* Horizontal Timeline Panel */}
+        {(() => {
+          const landlordProperties = getPropertiesByLandlord(activeUser.id);
+          if (landlordProperties.length === 0) return null;
+
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const todayMs = today.getTime();
+          const yearMs = 365.25 * 24 * 60 * 60 * 1000;
+
+          // Generate next 12 months starting from today
+          const timelineMonths = [];
+          for (let i = 0; i < 12; i++) {
+            const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
+            timelineMonths.push(d);
+          }
+
+          const ticks = timelineMonths.map((m, idx) => {
+            const mStart = new Date(m.getFullYear(), m.getMonth(), 1);
+            let pct = ((mStart.getTime() - todayMs) / yearMs) * 100;
+            if (idx === 0) pct = 0;
+            return {
+              label: m.toLocaleString("pl-PL", { month: "short" }).toUpperCase(),
+              pct: Math.max(0, Math.min(100, pct))
+            };
+          });
+
+          return (
+            <div className="glass p-6 rounded-2xl border-brand-500/10 space-y-4">
+              <h3 className="text-base font-bold text-white font-sans flex items-center justify-between border-b border-dark-800 pb-3">
+                <span className="flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-brand-400" />
+                  Harmonogram Najmu (Timeline 12 miesięcy)
+                </span>
+                <span className="text-[10px] text-dark-400 font-medium">
+                  Dziś: <strong className="text-brand-400">{today.toLocaleDateString("pl-PL")}</strong>
+                </span>
+              </h3>
+
+              <div className="overflow-x-auto">
+                <div className="min-w-[700px] pb-2 space-y-2 relative font-sans">
+                  
+                  {/* Timeline Header - Month Labels */}
+                  <div className="flex select-none h-6 mb-1 relative">
+                    <div className="w-36 shrink-0" />
+                    <div className="flex-1 relative">
+                      {ticks.map((tick, i) => (
+                        <span 
+                          key={i} 
+                          className="absolute text-[9px] text-dark-500 font-bold uppercase tracking-wider -translate-x-1/2"
+                          style={{ left: `${tick.pct}%` }}
+                        >
+                          {tick.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Property Rows */}
+                  <div className="space-y-2.5">
+                    {landlordProperties.map((p) => {
+                      const lStart = p.leaseStart ? new Date(p.leaseStart) : null;
+                      let lEnd = p.leaseEnd ? new Date(p.leaseEnd) : null;
+                      if (p.earlyTermination && p.earlyTermination.terminationDate) {
+                        lEnd = new Date(p.earlyTermination.terminationDate);
+                      }
+
+                      const tenant = p.tenant_id ? getUserById(p.tenant_id) : null;
+                      const hasLease = lStart && lEnd && p.tenant_id && lEnd >= today;
+
+                      let startPct = 0;
+                      let endPct = 0;
+                      let widthPct = 0;
+
+                      if (hasLease) {
+                        const startMs = lStart.getTime();
+                        const endMs = lEnd.getTime();
+                        
+                        startPct = ((startMs - todayMs) / yearMs) * 100;
+                        endPct = ((endMs - todayMs) / yearMs) * 100;
+
+                        startPct = Math.max(0, Math.min(100, startPct));
+                        endPct = Math.max(0, Math.min(100, endPct));
+                        widthPct = endPct - startPct;
+                      }
+
+                      return (
+                        <div key={p.id} className="flex items-center">
+                          {/* Property Label */}
+                          <div className="w-36 shrink-0 pr-4 text-xxs font-bold text-white truncate" title={p.title}>
+                            🏠 {p.title.split(",")[0]}
+                          </div>
+
+                          {/* Track */}
+                          <div className="flex-1 h-7 bg-dark-950/40 rounded-xl border border-dark-800/80 relative overflow-hidden">
+                            {/* Vertical ticks */}
+                            {ticks.map((tick, i) => (
+                              <div 
+                                key={i} 
+                                className="absolute top-0 bottom-0 border-l border-dark-800/40 pointer-events-none" 
+                                style={{ left: `${tick.pct}%` }}
+                              />
+                            ))}
+
+                            {/* Active Lease Bar */}
+                            {hasLease && widthPct > 0 && (
+                              <div 
+                                className="absolute top-1 bottom-1 bg-gradient-to-r from-blue-600 to-indigo-500 hover:from-blue-500 hover:to-indigo-400 border border-blue-400/20 rounded-lg flex items-center px-2.5 shadow-lg shadow-blue-500/10 cursor-pointer group transition-all"
+                                style={{ left: `${startPct}%`, width: `${widthPct}%` }}
+                              >
+                                <span className="text-[9px] font-bold text-white truncate max-w-full leading-none flex items-center gap-1 font-sans">
+                                  👤 {tenant ? tenant.name : "Najemca"}
+                                </span>
+
+                                {/* Tooltip */}
+                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 w-52 hidden group-hover:block bg-dark-950 border border-dark-800 rounded-xl p-3 text-[10px] text-dark-200 shadow-2xl z-30 space-y-1.5 font-sans text-left leading-normal">
+                                  <div className="font-bold text-white border-b border-dark-800 pb-1.5 flex items-center justify-between">
+                                    <span className="truncate pr-2">{p.title.split(",")[0]}</span>
+                                    <span className="text-[8px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 uppercase font-black tracking-wider shrink-0">Najem</span>
+                                  </div>
+                                  <div className="pt-0.5">
+                                    <span className="text-dark-500 block text-[9px] uppercase tracking-wider font-bold">Lokator:</span>
+                                    <strong className="text-white text-xs">{tenant ? tenant.name : "Nieznany"}</strong>
+                                  </div>
+                                  <div>
+                                    <span className="text-dark-500 block text-[9px] uppercase tracking-wider font-bold">Okres kontraktu:</span>
+                                    <strong className="text-white">{p.leaseStart} - {p.leaseEnd}</strong>
+                                  </div>
+                                  {p.earlyTermination && (
+                                    <div className="text-amber-400 font-semibold border-t border-dark-800/60 pt-1.5 mt-1 text-[9px]">
+                                      ⚠️ Rozwiązano przed czasem: <strong className="text-amber-300 block">{p.earlyTermination.terminationDate}</strong>
+                                    </div>
+                                  )}
+                                  <div className="border-t border-dark-800/60 pt-1.5 mt-1 text-[9px] text-dark-400">
+                                    Czynsz: <strong className="text-white font-mono">{p.rentAmount} PLN</strong>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Vacant track description if empty */}
+                            {(!hasLease || widthPct === 0) && (
+                              <div className="absolute inset-0 border border-dashed border-dark-850/40 bg-dark-950/5 flex items-center px-3 justify-center pointer-events-none">
+                                <span className="text-[8px] text-dark-500 font-bold uppercase tracking-widest">📭 Wolny lokal</span>
+                              </div>
+                            )}
+
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Dashboard grid panel */}
         <div className="grid gap-6 md:grid-cols-3">
@@ -412,6 +578,14 @@ export default function LandlordDashboard({ activeUser }) {
           <div className="fixed bottom-6 right-6 z-50 bg-green-600 text-white px-5 py-2.5 rounded-full text-xs font-bold flex items-center gap-2 shadow-2xl animate-bounce">
             <CheckCircle className="w-3.5 h-3.5" />
             {successToast}
+          </div>
+        )}
+
+        {/* Error Toast */}
+        {errorToast && (
+          <div className="fixed bottom-6 right-6 z-50 bg-red-600 text-white px-5 py-2.5 rounded-full text-xs font-bold flex items-center gap-2 shadow-2xl animate-bounce">
+            <XCircle className="w-3.5 h-3.5" />
+            {errorToast}
           </div>
         )}
 

@@ -15,9 +15,13 @@ import {
   addTenant,
   updatePropertyTenant,
   addMeterReading,
-  updateUserProfile
+  updateUserProfile,
+  getDocuments,
+  addDocument,
+  deleteDocument,
+  openDocumentFile
 } from "../../utils/storage";
-import { CreditCard, Plus, Check, Calendar, PlusCircle, AlertTriangle, CheckCircle, FileText, Info, X, Sparkles, Trash2, Coins, TrendingUp, History, UserPlus, Database, Layers } from "lucide-react";
+import { CreditCard, Plus, Check, Calendar, PlusCircle, AlertTriangle, CheckCircle, FileText, Info, X, Sparkles, Trash2, Coins, TrendingUp, History, UserPlus, Database, Layers, Eye } from "lucide-react";
 
 
 export default function LandlordInvoices({ landlordId }) {
@@ -35,6 +39,11 @@ export default function LandlordInvoices({ landlordId }) {
   const [notes, setNotes] = useState("");
   const [adminFeeLoadedStatus, setAdminFeeLoadedStatus] = useState("");
   const [mediaFeeLoadedStatus, setMediaFeeLoadedStatus] = useState("");
+
+  // Admin fees configuration panel state
+  const [adminFeesMonth, setAdminFeesMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [adminFeesValues, setAdminFeesValues] = useState({});
+  const [adminFeesSavedState, setAdminFeesSavedState] = useState({});
 
   // Booking modal state
   const [showBookingModal, setShowBookingModal] = useState(false);
@@ -60,6 +69,9 @@ export default function LandlordInvoices({ landlordId }) {
 
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+
+  const [cashFlowReports, setCashFlowReports] = useState([]);
+  const [generatingReport, setGeneratingReport] = useState(false);
 
   // History Wizard States
   const [showHistoryWizard, setShowHistoryWizard] = useState(false);
@@ -114,6 +126,7 @@ export default function LandlordInvoices({ landlordId }) {
     const allProps = getPropertiesByLandlord(landlordId);
     setAllLandlordProperties(allProps);
     setAllTenants(getUsers().filter(u => u.role === "tenant"));
+    setCashFlowReports(getDocuments().filter(d => d.document_type === "cash_flow_report"));
   };
 
   useEffect(() => {
@@ -143,6 +156,59 @@ export default function LandlordInvoices({ landlordId }) {
       window.removeEventListener("rentportal_expenses_updated", handleReloadData);
     };
   }, [landlordId]);
+
+  // Load administrative fees from LocalStorage when properties or month changes
+  useEffect(() => {
+    const existingFees = JSON.parse(localStorage.getItem("rentportal_pending_admin_fees") || "{}");
+    const initialValues = {};
+    properties.forEach(p => {
+      const monthKey = `${p.id}_${adminFeesMonth}`;
+      if (existingFees[monthKey] !== undefined) {
+        initialValues[p.id] = existingFees[monthKey];
+      } else if (existingFees[p.id] && existingFees[p.id].month === adminFeesMonth) {
+        initialValues[p.id] = existingFees[p.id].amount;
+      } else {
+        initialValues[p.id] = "";
+      }
+    });
+    setAdminFeesValues(initialValues);
+  }, [adminFeesMonth, properties]);
+
+  const handleAdminFeeChange = (propId, val) => {
+    setAdminFeesValues(prev => ({
+      ...prev,
+      [propId]: val
+    }));
+  };
+
+  const saveSingleAdminFee = (propId, val) => {
+    const existingFees = JSON.parse(localStorage.getItem("rentportal_pending_admin_fees") || "{}");
+    const updatedFees = { ...existingFees };
+    
+    const monthKey = `${propId}_${adminFeesMonth}`;
+    if (val !== "" && Number(val) >= 0) {
+      updatedFees[monthKey] = Number(val);
+      // For backward compatibility and quick lookup:
+      updatedFees[propId] = {
+        amount: Number(val),
+        month: adminFeesMonth
+      };
+    } else {
+      delete updatedFees[monthKey];
+      if (updatedFees[propId] && updatedFees[propId].month === adminFeesMonth) {
+        delete updatedFees[propId];
+      }
+    }
+
+    localStorage.setItem("rentportal_pending_admin_fees", JSON.stringify(updatedFees));
+    window.dispatchEvent(new Event("rentportal_admin_fees_updated"));
+    
+    // Show green save confirmation
+    setAdminFeesSavedState(prev => ({ ...prev, [propId]: true }));
+    setTimeout(() => {
+      setAdminFeesSavedState(prev => ({ ...prev, [propId]: false }));
+    }, 2000);
+  };
 
   // Pre-populate tenant & rent for historical invoices based on property selection
   useEffect(() => {
@@ -476,14 +542,19 @@ export default function LandlordInvoices({ landlordId }) {
         
         // Look up pending admin fee for this property and month
         const pendingFees = JSON.parse(localStorage.getItem("rentportal_pending_admin_fees") || "{}");
+        const monthKey = `${selectedPropertyId}_${targetMonth}`;
+        const compoundVal = pendingFees[monthKey];
         const feeObj = pendingFees[selectedPropertyId];
  
-        if (feeObj && feeObj.month === targetMonth) {
+        if (compoundVal !== undefined) {
+          setAmountAdmin(String(compoundVal));
+          setAdminFeeLoadedStatus(`Automatycznie wczytano ze stawek (${compoundVal} zł za ${targetMonth})`);
+        } else if (feeObj && feeObj.month === targetMonth) {
           setAmountAdmin(String(feeObj.amount));
-          setAdminFeeLoadedStatus(`Automatycznie wczytano z szybkich akcji (${feeObj.amount} zł za ${feeObj.month})`);
+          setAdminFeeLoadedStatus(`Automatycznie wczytano ze stawek (${feeObj.amount} zł za ${feeObj.month})`);
         } else if (feeObj) {
           setAmountAdmin(String(feeObj.amount));
-          setAdminFeeLoadedStatus(`Automatycznie wczytano z szybkich akcji (${feeObj.amount} zł)`);
+          setAdminFeeLoadedStatus(`Automatycznie wczytano ze stawek (${feeObj.amount} zł)`);
         } else {
           setAmountAdmin("250"); // sensible default
           setAdminFeeLoadedStatus("");
@@ -508,10 +579,15 @@ export default function LandlordInvoices({ landlordId }) {
     if (selectedPropertyId && dueDate) {
       const targetMonth = dueDate.slice(0, 7); // "YYYY-MM"
       const pendingFees = JSON.parse(localStorage.getItem("rentportal_pending_admin_fees") || "{}");
+      const monthKey = `${selectedPropertyId}_${targetMonth}`;
+      const compoundVal = pendingFees[monthKey];
       const feeObj = pendingFees[selectedPropertyId];
-      if (feeObj && feeObj.month === targetMonth) {
+      if (compoundVal !== undefined) {
+        setAmountAdmin(String(compoundVal));
+        setAdminFeeLoadedStatus(`Automatycznie wczytano ze stawek (${compoundVal} zł za ${targetMonth})`);
+      } else if (feeObj && feeObj.month === targetMonth) {
         setAmountAdmin(String(feeObj.amount));
-        setAdminFeeLoadedStatus(`Automatycznie wczytano z szybkich akcji (${feeObj.amount} zł za ${feeObj.month})`);
+        setAdminFeeLoadedStatus(`Automatycznie wczytano ze stawek (${feeObj.amount} zł za ${feeObj.month})`);
       }
       
       const calculatedMedia = getMediaCostForPropertyAndMonth(selectedPropertyId, targetMonth);
@@ -532,10 +608,15 @@ export default function LandlordInvoices({ landlordId }) {
       if (selectedPropertyId) {
         const targetMonth = dueDate ? dueDate.slice(0, 7) : new Date().toISOString().slice(0, 7);
         const pendingFees = JSON.parse(localStorage.getItem("rentportal_pending_admin_fees") || "{}");
+        const monthKey = `${selectedPropertyId}_${targetMonth}`;
+        const compoundVal = pendingFees[monthKey];
         const feeObj = pendingFees[selectedPropertyId];
-        if (feeObj && feeObj.month === targetMonth) {
+        if (compoundVal !== undefined) {
+          setAmountAdmin(String(compoundVal));
+          setAdminFeeLoadedStatus(`Automatycznie wczytano ze stawek (${compoundVal} zł za ${targetMonth})`);
+        } else if (feeObj && feeObj.month === targetMonth) {
           setAmountAdmin(String(feeObj.amount));
-          setAdminFeeLoadedStatus(`Automatycznie wczytano z szybkich akcji (${feeObj.amount} zł za ${feeObj.month})`);
+          setAdminFeeLoadedStatus(`Automatycznie wczytano ze stawek (${feeObj.amount} zł za ${feeObj.month})`);
         }
       }
     };
@@ -664,19 +745,19 @@ export default function LandlordInvoices({ landlordId }) {
 
     if (!expensePropertyId) {
       setErrorMsg("Wybierz mieszkanie, którego dotyczy koszt.");
-      return;
+      return false;
     }
     if (!expenseAmount || Number(expenseAmount) <= 0) {
       setErrorMsg("Wpisz poprawną kwotę kosztu.");
-      return;
+      return false;
     }
     if (!expenseDate) {
       setErrorMsg("Podaj datę poniesienia kosztu.");
-      return;
+      return false;
     }
     if (!expenseDesc.trim()) {
       setErrorMsg("Wpisz krótki opis kosztu.");
-      return;
+      return false;
     }
 
     try {
@@ -694,8 +775,10 @@ export default function LandlordInvoices({ landlordId }) {
       
       // Refresh expenses list
       setExpenses(getExpenses().sort((a, b) => new Date(b.date) - new Date(a.date)));
+      return true;
     } catch (err) {
       setErrorMsg(err.message);
+      return false;
     }
   };
 
@@ -851,6 +934,606 @@ export default function LandlordInvoices({ landlordId }) {
     ? Math.round((netRentalIncome / rentRevenue) * 100) 
     : 0;
 
+  const generateCashFlowReportHtml = (propertyName, tenantName) => {
+    const reportDateStr = new Date().toLocaleString("pl-PL", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+
+    const dateRangeStr = (filterStartDate || filterEndDate)
+      ? `od ${filterStartDate || "początku"} do ${filterEndDate || "teraz"}`
+      : "Cały okres rozliczeniowy";
+
+    const balanceValue = stats.receivedSum - stats.totalSum;
+    const balanceSign = balanceValue > 0 ? "+" : "";
+
+    // Generate table rows
+    const tableRows = filteredInvoices.map((inv) => {
+      const propTitle = allLandlordProperties.find(p => p.id === inv.property_id)?.title.split(",")[0] || "Mieszkanie";
+      const tenName = allTenants.find(t => t.id === inv.tenant_id)?.name || "Lokator";
+      const diff = (inv.receivedPayment || 0) - inv.amount;
+      
+      let statusLabel = "Niezapłacony";
+      let statusClass = "status-unpaid";
+      if (inv.receivedPayment >= inv.amount) {
+        statusLabel = "Zapłacony";
+        statusClass = "status-paid";
+      } else if (inv.receivedPayment > 0) {
+        statusLabel = "Częściowy";
+        statusClass = "status-partial";
+      }
+
+      let billingMonth = "";
+      if (inv.issueDate) {
+        const d = new Date(inv.issueDate);
+        billingMonth = d.toLocaleString('pl-PL', { month: 'long', year: 'numeric' });
+      } else {
+        billingMonth = inv.title;
+      }
+
+      return `
+        <tr class="table-row">
+          <td style="padding: 12px 8px; font-family: monospace;">${inv.id}</td>
+          <td style="padding: 12px 8px; font-weight: bold; text-transform: capitalize;">${billingMonth}</td>
+          <td style="padding: 12px 8px;">${propTitle}</td>
+          <td style="padding: 12px 8px;">${tenName}</td>
+          <td style="padding: 12px 8px; text-align: right; font-family: monospace;">${inv.amount.toFixed(2)}</td>
+          <td style="padding: 12px 8px; text-align: right; font-family: monospace;">${(inv.receivedPayment || 0).toFixed(2)}</td>
+          <td style="padding: 12px 8px; text-align: right; font-family: monospace; font-weight: bold; color: ${diff < 0 ? '#ef4444' : diff > 0 ? '#10b981' : '#cbd5e1'}">${diff > 0 ? '+' : ''}${diff.toFixed(2)}</td>
+          <td style="padding: 12px 8px; text-align: center;"><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+        </tr>
+      `;
+    }).join("");
+
+    // Generate anomalies rows
+    const anomalies = filteredInvoices.filter(inv => (inv.receivedPayment || 0) !== inv.amount);
+    const anomaliesContent = anomalies.length === 0
+      ? `<div style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); padding: 15px; border-radius: 8px; color: #10b981; text-align: center; font-size: 13px;">
+          ✅ Brak wykrytych anomalii płatniczych w wybranym przedziale.
+         </div>`
+      : `<table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; margin-top: 10px;">
+          <thead>
+            <tr style="border-bottom: 2px solid #ef4444; color: #ef4444; font-weight: bold;">
+              <th style="padding: 8px;">Miesiąc / ID</th>
+              <th style="padding: 8px;">Mieszkanie / Lokator</th>
+              <th style="padding: 8px; text-align: right;">Należność</th>
+              <th style="padding: 8px; text-align: right;">Otrzymano</th>
+              <th style="padding: 8px; text-align: right;">Różnica</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${anomalies.map(inv => {
+              const propTitle = allLandlordProperties.find(p => p.id === inv.property_id)?.title.split(",")[0] || "Mieszkanie";
+              const tenName = allTenants.find(t => t.id === inv.tenant_id)?.name || "Lokator";
+              const diff = (inv.receivedPayment || 0) - inv.amount;
+              let billingMonth = inv.issueDate 
+                ? new Date(inv.issueDate).toLocaleString('pl-PL', { month: 'long', year: 'numeric' })
+                : inv.title;
+              return `
+                <tr style="border-bottom: 1px solid rgba(239, 68, 68, 0.1); color: ${diff < 0 ? '#ef4444' : '#10b981'};">
+                  <td style="padding: 8px; font-weight: bold;">${billingMonth} <span style="font-size: 10px; opacity: 0.6; font-family: monospace;">(${inv.id})</span></td>
+                  <td style="padding: 8px;">${propTitle} / ${tenName}</td>
+                  <td style="padding: 8px; text-align: right; font-family: monospace;">${inv.amount.toFixed(2)}</td>
+                  <td style="padding: 8px; text-align: right; font-family: monospace;">${(inv.receivedPayment || 0).toFixed(2)}</td>
+                  <td style="padding: 8px; text-align: right; font-family: monospace; font-weight: bold;">${diff > 0 ? '+' : ''}${diff.toFixed(2)} PLN</td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+         </table>`;
+
+    return `<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Raport Cash Flow - RentPortal</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap');
+    
+    body {
+      background-color: #0b0f19;
+      color: #f8fafc;
+      font-family: 'Outfit', 'Inter', -apple-system, sans-serif;
+      margin: 0;
+      padding: 0;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    
+    .report-container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    
+    .report-card {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 20px;
+      padding: 35px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    
+    .header-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 30px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      padding-bottom: 20px;
+    }
+    
+    .brand-title {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin: 0;
+    }
+    
+    .document-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 5px;
+    }
+    
+    .meta-value {
+      font-family: monospace;
+      color: #cbd5e1;
+    }
+    
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #3b82f6;
+      margin-top: 35px;
+      margin-bottom: 15px;
+      border-left: 3px solid #3b82f6;
+      padding-left: 10px;
+    }
+    
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+    
+    .metric-card {
+      background: rgba(30, 41, 59, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 15px;
+      text-align: center;
+    }
+    
+    .metric-title {
+      font-size: 10px;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 5px;
+      display: block;
+    }
+    
+    .metric-value {
+      font-size: 16px;
+      font-weight: 800;
+      font-family: monospace;
+    }
+    
+    .breakdown-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    
+    .breakdown-card {
+      background: rgba(30, 41, 59, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+    }
+    
+    .table-header {
+      background: rgba(15, 23, 42, 0.8);
+      color: #94a3b8;
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .table-row {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 12px;
+    }
+    
+    .table-row:hover {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    
+    .status-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+    }
+    
+    .status-paid {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+    }
+    
+    .status-partial {
+      background: rgba(245, 158, 11, 0.15);
+      color: #f59e0b;
+    }
+    
+    .status-unpaid {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+    }
+    
+    .signature-container {
+      margin-top: 50px;
+      display: flex;
+      justify-content: flex-end;
+    }
+    
+    .signature-box {
+      border-top: 1px dashed rgba(255, 255, 255, 0.2);
+      width: 250px;
+      text-align: center;
+      padding-top: 10px;
+      font-size: 11px;
+      color: #94a3b8;
+    }
+    
+    @media print {
+      .no-print {
+        display: none !important;
+      }
+      
+      body {
+        background-color: white !important;
+        color: #0f172a !important;
+        font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      
+      .report-container {
+        padding: 0 !important;
+        max-width: 100% !important;
+      }
+      
+      .report-card {
+        background: white !important;
+        border: none !important;
+        box-shadow: none !important;
+        backdrop-filter: none !important;
+        padding: 0 !important;
+      }
+      
+      .brand-title {
+        color: #1d4ed8 !important;
+        -webkit-text-fill-color: #1d4ed8 !important;
+      }
+      
+      .document-title {
+        color: #64748b !important;
+      }
+      
+      .header-table {
+        border-bottom: 2px solid #e2e8f0 !important;
+        margin-bottom: 20px;
+      }
+      
+      .meta-value {
+        color: #0f172a !important;
+      }
+      
+      .section-title {
+        color: #1d4ed8 !important;
+        border-left: 3px solid #1d4ed8 !important;
+        margin-top: 25px;
+      }
+      
+      .metric-card {
+        background: #f8fafc !important;
+        border: 1px solid #e2e8f0 !important;
+        color: #0f172a !important;
+      }
+      
+      .metric-title {
+        color: #64748b !important;
+      }
+      
+      .breakdown-card {
+        background: #f8fafc !important;
+        border: 1px solid #e2e8f0 !important;
+        color: #0f172a !important;
+      }
+      
+      .table-header {
+        background: #f1f5f9 !important;
+        color: #475569 !important;
+        border-bottom: 2px solid #cbd5e1 !important;
+      }
+      
+      .table-row {
+        border-bottom: 1px solid #e2e8f0 !important;
+        color: #334155 !important;
+      }
+      
+      .status-badge {
+        border: 1px solid currentColor !important;
+      }
+      
+      .status-paid {
+        background: none !important;
+        color: #166534 !important;
+      }
+      
+      .status-partial {
+        background: none !important;
+        color: #9a3412 !important;
+      }
+      
+      .status-unpaid {
+        background: none !important;
+        color: #991b1b !important;
+      }
+      
+      .signature-box {
+        border-top: 1px dashed #94a3b8 !important;
+        color: #475569 !important;
+      }
+      
+      tr {
+        page-break-inside: avoid !important;
+      }
+      
+      @page {
+        size: A4;
+        margin: 1.5cm;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="no-print" style="position: sticky; top: 0; background: #0b0f19; padding: 15px; text-align: center; border-bottom: 1px solid #1e293b; display: flex; justify-content: center; gap: 15px; align-items: center; z-index: 1000; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);">
+    <span style="color: #94a3b8; font-size: 13px; font-family: 'Outfit', sans-serif;">Zestawienie finansowe wygenerowane pomyślnie. Kliknij przycisk obok, aby wydrukować lub zapisać do PDF.</span>
+    <button onclick="window.print()" style="background: #3b82f6; color: white; border: none; padding: 8px 18px; font-weight: bold; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: 'Outfit', sans-serif; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);">
+      🖨️ Drukuj / Zapisz jako PDF
+    </button>
+  </div>
+
+  <div class="report-container">
+    <div class="report-card">
+      
+      <!-- Nagłówek dokumentu -->
+      <table class="header-table">
+        <tr>
+          <td style="vertical-align: top; width: 60%;">
+            <h1 class="brand-title">RENTPORTAL</h1>
+            <div class="document-title">Raport Cash Flow / Zestawienie Finansowe</div>
+          </td>
+          <td style="vertical-align: top; text-align: right; font-size: 12px; color: #94a3b8; line-height: 1.6;">
+            <div>Data wygenerowania: <strong class="meta-value">${reportDateStr}</strong></div>
+            <div>Okres zestawienia: <strong class="meta-value">${dateRangeStr}</strong></div>
+            <div>Zarządca ID: <strong class="meta-value">${landlordId}</strong></div>
+          </td>
+        </tr>
+      </table>
+
+      <!-- Kryteria filtracji -->
+      <div class="section-title">Zastosowane Filtry Zestawienia</div>
+      <div style="background: rgba(30, 41, 59, 0.2); border: 1px solid rgba(255, 255, 255, 0.03); border-radius: 12px; padding: 15px; margin-bottom: 25px; font-size: 13px;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td style="padding: 4px 0; color: #94a3b8;">Wybrana nieruchomość:</td>
+            <td style="padding: 4px 0; font-weight: bold; color: white;" class="meta-value">${propertyName}</td>
+            <td style="padding: 4px 0; color: #94a3b8; text-align: right;">Zakres dat od:</td>
+            <td style="padding: 4px 0; font-weight: bold; text-align: right; color: white;" class="meta-value">${filterStartDate || 'brak ograniczenia'}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0; color: #94a3b8;">Wybrany lokator:</td>
+            <td style="padding: 4px 0; font-weight: bold; color: white;" class="meta-value">${tenantName}</td>
+            <td style="padding: 4px 0; color: #94a3b8; text-align: right;">Zakres dat do:</td>
+            <td style="padding: 4px 0; font-weight: bold; text-align: right; color: white;" class="meta-value">${filterEndDate || 'brak ograniczenia'}</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Główne KPI Finansowe -->
+      <div class="section-title">Podsumowanie Przepływu Środków (KPI)</div>
+      <div class="metrics-grid">
+        <div class="metric-card" style="border-top: 3px solid #3b82f6;">
+          <span class="metric-title">Należności</span>
+          <span class="metric-value" style="color: white;">${stats.totalSum.toFixed(2)}</span>
+          <span style="font-size: 9px; color: #94a3b8; display: block; margin-top: 3px;">Zafakturowano</span>
+        </div>
+        <div class="metric-card" style="border-top: 3px solid #10b981;">
+          <span class="metric-title">Wpłaty</span>
+          <span class="metric-value" style="color: #10b981;">${stats.receivedSum.toFixed(2)}</span>
+          <span style="font-size: 9px; color: #94a3b8; display: block; margin-top: 3px;">Otrzymano</span>
+        </div>
+        <div class="metric-card" style="border-top: 3px solid #ef4444;">
+          <span class="metric-title">Niedopłaty</span>
+          <span class="metric-value" style="color: #ef4444;">${stats.underpayments.toFixed(2)}</span>
+          <span style="font-size: 9px; color: #94a3b8; display: block; margin-top: 3px;">Zadłużenie</span>
+        </div>
+        <div class="metric-card" style="border-top: 3px solid #f59e0b;">
+          <span class="metric-title">Nadpłaty</span>
+          <span class="metric-value" style="color: #f59e0b;">${stats.overpayments.toFixed(2)}</span>
+          <span style="font-size: 9px; color: #94a3b8; display: block; margin-top: 3px;">Nadwyżki</span>
+        </div>
+        <div class="metric-card" style="border-top: 3px solid ${balanceValue >= 0 ? '#10b981' : '#ef4444'};">
+          <span class="metric-title">Końcowe Saldo</span>
+          <span class="metric-value" style="color: ${balanceValue >= 0 ? '#10b981' : '#ef4444'};">${balanceSign}${balanceValue.toFixed(2)}</span>
+          <span style="font-size: 9px; color: #94a3b8; display: block; margin-top: 3px;">Bilans</span>
+        </div>
+      </div>
+
+      <!-- Rozbicie Kategorii -->
+      <div class="section-title">Kategorie Przychodowe</div>
+      <div class="breakdown-grid">
+        <div class="breakdown-card">
+          <span style="color: #94a3b8;">🏠 Czynsz najmu (umowny):</span>
+          <strong style="color: white;">${rentRevenue.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</strong>
+        </div>
+        <div class="breakdown-card">
+          <span style="color: #94a3b8;">🏢 Opłata administracyjna:</span>
+          <strong style="color: white;">${stats.adminSum.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</strong>
+        </div>
+        <div class="breakdown-card">
+          <span style="color: #94a3b8;">⚡ Opłaty za media (liczniki):</span>
+          <strong style="color: white;">${stats.utilitiesSum.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</strong>
+        </div>
+      </div>
+
+      <!-- Wykaz Anomalii (jeśli są) -->
+      <div class="section-title" style="color: #ef4444; border-left-color: #ef4444;">⚠️ Wykaz Anomalii Płatniczych (Niedopłaty / Nadpłaty)</div>
+      <div style="margin-bottom: 30px;">
+        ${anomaliesContent}
+      </div>
+
+      <!-- Tabela Szczegółowa -->
+      <div class="section-title">Rejestr Rachunków i Płatności Szczegółowych</div>
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left;">
+          <thead>
+            <tr class="table-header">
+              <th style="padding: 12px 8px; width: 10%;">ID</th>
+              <th style="padding: 12px 8px; width: 18%;">Okres / Tytuł</th>
+              <th style="padding: 12px 8px; width: 22%;">Nieruchomość</th>
+              <th style="padding: 12px 8px; width: 18%;">Najemca</th>
+              <th style="padding: 12px 8px; text-align: right; width: 10%;">Należność</th>
+              <th style="padding: 12px 8px; text-align: right; width: 10%;">Otrzymano</th>
+              <th style="padding: 12px 8px; text-align: right; width: 10%;">Saldo</th>
+              <th style="padding: 12px 8px; text-align: center; width: 12%;">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows || `<tr><td colspan="8" style="padding: 20px; text-align: center; color: #94a3b8;">Brak rachunków spełniających kryteria.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Podpis administratora -->
+      <div class="signature-container">
+        <div class="signature-box">
+          Sporządził Administrator Systemu RentPortal
+          <div style="height: 40px;"></div>
+          ...................................................
+          <div style="font-size: 9px; margin-top: 5px; opacity: 0.8;">Data i podpis zarządcy</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</body>
+</html>`;
+  };
+
+  const handleGenerateCashFlowReport = async () => {
+    try {
+      setGeneratingReport(true);
+      setErrorMsg("");
+      setSuccessMsg("Generowanie raportu Cash Flow...");
+
+      const propertyName = filterPropertyId !== "all" 
+        ? allLandlordProperties.find(p => p.id === filterPropertyId)?.title || "Mieszkanie"
+        : "Wszystkie Lokale";
+        
+      const tenantName = filterTenantId !== "all"
+        ? allTenants.find(t => t.id === filterTenantId)?.name || "Lokator"
+        : "Wszyscy Lokatorzy";
+
+      const htmlContent = generateCashFlowReportHtml(propertyName, tenantName);
+
+      // Convert to Base64 data URL
+      const base64Data = "data:text/html;base64," + btoa(unescape(encodeURIComponent(htmlContent)));
+      const cleanPropName = propertyName.split(",")[0].replace(/\s+/g, "_");
+      const cleanTenantName = tenantName.replace(/\s+/g, "_");
+      const fileName = `Raport_CashFlow_${cleanPropName}_${cleanTenantName}_${Date.now()}.html`;
+
+      // Post to server to save physically on disk
+      const saveResponse = await fetch("/api/save-document", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          fileName,
+          fileData: base64Data
+        })
+      });
+
+      if (!saveResponse.ok) {
+        const errData = await saveResponse.json();
+        throw new Error(errData.error || "Serwer odmówił zapisu pliku raportu.");
+      }
+
+      const { fileUrl } = await saveResponse.json();
+
+      // Add document record
+      addDocument({
+        property_id: filterPropertyId !== "all" ? filterPropertyId : null,
+        tenant_id: filterTenantId !== "all" ? filterTenantId : null,
+        document_type: "cash_flow_report",
+        file_name: fileName,
+        file_size: (htmlContent.length / 1024).toFixed(1) + " KB",
+        file_data: fileUrl
+      });
+
+      setSuccessMsg("Raport Cash Flow został pomyślnie wygenerowany!");
+      setTimeout(() => setSuccessMsg(""), 3500);
+      handleReloadData();
+      
+      // Auto-open in new tab
+      window.open(fileUrl, "_blank");
+    } catch (err) {
+      console.error(err);
+      alert("Błąd podczas generowania raportu: " + err.message);
+      setErrorMsg("Błąd generowania raportu: " + err.message);
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const handleDeleteReport = (docId) => {
+    if (!window.confirm("Czy na pewno chcesz usunąć to zestawienie raportu?")) return;
+    try {
+      deleteDocument(docId);
+      setSuccessMsg("Raport został pomyślnie usunięty.");
+      setTimeout(() => setSuccessMsg(""), 3000);
+      handleReloadData();
+    } catch (err) {
+      alert("Błąd podczas usuwania raportu: " + err.message);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -895,7 +1578,238 @@ export default function LandlordInvoices({ landlordId }) {
         </div>
       )}
 
-      {/* Cash Flow Panel & Filters */}
+
+      {/* 1. Panel Opłat Administracyjnych (Stawki Miesięczne) */}
+      <div className="glass p-6 rounded-2xl border-brand-500/10 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-dark-800/80 pb-4">
+          <div>
+            <h3 className="font-bold text-white text-base flex items-center gap-2 font-sans">
+              <Layers className="w-5 h-5 text-brand-400" />
+              Miesięczne Opłaty Administracyjne Lokali
+            </h3>
+            <p className="text-dark-500 text-xxs mt-0.5 font-sans">
+              Wprowadź wysokość czynszu administracyjnego dla aktywnie wynajmowanych lokali w danym miesiącu.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xxs text-dark-400 font-bold uppercase tracking-wider">Okres rozliczeniowy:</span>
+            <input
+              type="month"
+              value={adminFeesMonth}
+              onChange={(e) => setAdminFeesMonth(e.target.value)}
+              className="bg-dark-900 border border-dark-800 rounded-xl px-3 py-1 text-white text-xs font-bold font-mono focus:border-brand-500 focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {properties.length === 0 ? (
+          <p className="text-dark-500 text-xs py-4 text-center bg-dark-900/30 rounded-xl border border-dark-800">
+            Brak aktywnie wynajmowanych lokali w systemie.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left text-xs text-dark-300">
+              <thead>
+                <tr className="bg-dark-900/40 border-b border-dark-800 text-[10px] font-bold text-dark-400 uppercase tracking-wider">
+                  <th className="p-3">LP</th>
+                  <th className="p-3">Lokal (Mieszkanie)</th>
+                  <th className="p-3">Aktywny Najemca</th>
+                  <th className="p-3">Czynsz najmu (Z umowy)</th>
+                  <th className="p-3 text-right" style={{ width: "200px" }}>Czynsz admin. (PLN / miesiąc)</th>
+                  <th className="p-3 text-center" style={{ width: "120px" }}>Status zapisu</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-dark-800 bg-dark-900/10">
+                {properties.map((p, idx) => {
+                  const tenant = getUserById(p.tenant_id);
+                  const val = adminFeesValues[p.id] !== undefined ? adminFeesValues[p.id] : "";
+                  const isSaved = adminFeesSavedState[p.id];
+
+                  return (
+                    <tr key={p.id} className="hover:bg-dark-900/30 transition-colors">
+                      <td className="p-3 font-mono text-dark-500">{idx + 1}</td>
+                      <td className="p-3 text-white font-bold">{p.title.split(",")[0]}</td>
+                      <td className="p-3 text-dark-350">
+                        {tenant ? (
+                          <span className="font-semibold text-brand-300">{tenant.name}</span>
+                        ) : (
+                          <span className="text-dark-500">brak</span>
+                        )}
+                      </td>
+                      <td className="p-3 font-mono text-dark-400">
+                        {p.rentAmount ? `${p.rentAmount.toLocaleString("pl-PL")} PLN` : "—"}
+                      </td>
+                      <td className="p-3 text-right">
+                        <input
+                          type="number"
+                          placeholder="np. 350"
+                          value={val}
+                          onChange={(e) => handleAdminFeeChange(p.id, e.target.value)}
+                          onBlur={(e) => saveSingleAdminFee(p.id, e.target.value)}
+                          className="bg-dark-950 border border-dark-800 focus:border-brand-500 rounded-lg px-2.5 py-1 text-xs text-white font-mono text-right w-32 focus:outline-none"
+                        />
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className={`inline-flex items-center justify-center text-[10px] font-bold px-2 py-0.5 rounded transition-all duration-300 ${
+                          isSaved 
+                            ? "bg-green-500/10 text-green-400 border border-green-500/25 opacity-100 scale-100" 
+                            : "opacity-0 scale-95"
+                        }`}>
+                          Zapisano ✓
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 2. Rejestr Płatności (Invoices List) */}
+      <div className="glass p-6 rounded-2xl">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+          <FileText className="w-5 h-5 text-brand-400" />
+          Rejestr Płatności
+        </h3>
+
+        {filteredInvoices.length === 0 ? (
+          <p className="text-dark-500 text-center py-6 text-sm">
+            {invoices.length === 0 
+              ? "Brak zarejestrowanych płatności w systemie." 
+              : "Brak płatności spełniających wybrane kryteria filtrowania."}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left text-xs text-dark-300 min-w-[900px]">
+              <thead>
+                <tr className="border-b border-dark-800 text-[10px] font-bold text-dark-400 uppercase tracking-wider">
+                  <th className="pb-3">Tytuł Rachunku</th>
+                  <th className="pb-3">Mieszkanie / Najemca</th>
+                  <th className="pb-3 text-right">Czynsz najmu</th>
+                  <th className="pb-3 text-right">Czynsz admin.</th>
+                  <th className="pb-3 text-right">Opłata za media</th>
+                  <th className="pb-3 text-right text-brand-400 font-bold">Opłata (Suma)</th>
+                  <th className="pb-3 text-center">Termin</th>
+                  <th className="pb-3 text-center">Status</th>
+                  <th className="pb-3 text-right">Akcja</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-dark-800">
+                {filteredInvoices.map((inv) => {
+                  const prop = getPropertyById(inv.property_id);
+                  const tenant = getUserById(inv.tenant_id);
+                  const isPaid = inv.status === "paid";
+                  const isOverdue = inv.status === "overdue";
+ 
+                  return (
+                    <tr key={inv.id} className="hover:bg-dark-900/30 transition-colors">
+                      <td className="py-3.5">
+                        <div className="font-bold text-white text-xs leading-tight">{inv.title}</div>
+                        <div className="text-[10px] text-dark-500 font-mono mt-1">ID: {inv.id}</div>
+                        {inv.notes && (
+                          <div className="text-[9px] text-dark-450 italic mt-1 bg-dark-950/40 p-1 rounded border border-dark-850 max-w-[180px] truncate" title={inv.notes}>
+                            📝 {inv.notes}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3.5">
+                        <div className="font-semibold text-white text-xs leading-tight">{prop ? prop.title.split(",")[0] : 'Nieruchomość'}</div>
+                        <div className="text-[10px] text-dark-500 mt-1">L: <strong className="text-brand-300 font-medium">{tenant ? tenant.name : 'brak'}</strong></div>
+                      </td>
+                      <td className="py-3.5 text-right font-mono text-white text-xs">
+                        {(inv.amountRent || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                      </td>
+                      <td className="py-3.5 text-right font-mono text-white text-xs">
+                        {(inv.amountAdmin || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                      </td>
+                      <td className="py-3.5 text-right font-mono text-brand-300 font-bold text-xs">
+                        {(inv.amountUtilities || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                      </td>
+                      <td className="py-3.5 text-right font-mono text-white font-black">
+                        <div className="text-xs">{(inv.amount || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</div>
+                        <div className="text-[9px] text-green-400 font-semibold mt-0.5">
+                          Wpłata: {(inv.receivedPayment || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                        </div>
+                        {(() => {
+                          const diff = (inv.receivedPayment || 0) - inv.amount;
+                          return (
+                            <div className="mt-0.5">
+                              {diff > 0 ? (
+                                <span className="text-[8px] font-bold text-green-400 bg-green-500/10 px-1 py-0.2 rounded">
+                                  Nadpłata: +{diff.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                                </span>
+                              ) : diff < 0 ? (
+                                <span className="text-[8px] font-bold text-red-400 bg-red-500/10 px-1 py-0.2 rounded">
+                                  Niedopłata: {diff.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                                </span>
+                              ) : (
+                                <span className="text-[8px] font-semibold text-dark-500">
+                                  Rozliczone
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="py-3.5 text-center text-xs">
+                        <span className="flex items-center justify-center gap-1 font-medium text-white">
+                          <Calendar className="w-3.5 h-3.5 text-dark-500" />
+                          {inv.due_date}
+                        </span>
+                        {(() => {
+                          const timeliness = getPaymentTimeliness(inv.due_date, inv.paymentDate, inv.status);
+                          if (!timeliness) return null;
+                          return (
+                            <div className="text-[9px] mt-1 text-center font-sans">
+                              <span className={timeliness.colorClass}>
+                                {timeliness.message}
+                              </span>
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="py-3.5 text-center">
+                        <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                          isPaid 
+                            ? 'bg-green-500/10 text-green-400 border-green-500/20' 
+                            : isOverdue 
+                            ? 'bg-red-500/10 text-red-400 border-red-500/20 animate-pulse' 
+                            : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+                        }`}>
+                          {isPaid ? "Opłacona" : isOverdue ? "Zaległa" : "Nieopłacona"}
+                        </span>
+                      </td>
+                      <td className="py-3.5 text-right font-sans">
+                        <button
+                          onClick={() => {
+                            setBookingInvoice(inv);
+                            setBookingAmount(inv.receivedPayment || inv.amount);
+                            setBookingDate(inv.paymentDate || new Date().toISOString().split('T')[0]);
+                            setBookingNotes(inv.notes || "");
+                            setShowBookingModal(true);
+                          }}
+                          className={`py-1 px-2.5 border rounded-xl text-xxs font-bold transition-all flex items-center gap-1 ml-auto cursor-pointer ${
+                            inv.receivedPayment > 0
+                              ? 'bg-brand-500/10 hover:bg-brand-500/25 border-brand-500/20 text-brand-300'
+                              : 'bg-green-500/10 hover:bg-green-500/25 border-green-500/20 text-green-400'
+                          }`}
+                        >
+                          <Check className="w-3 h-3" />
+                          {inv.receivedPayment > 0 ? "Edytuj wpłatę" : "Zaksięguj wpłatę"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 3. Panel Analizy Cash Flow i Filtrów */}
       <div className="glass p-6 rounded-2xl border-brand-500/10 space-y-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-dark-800/80 pb-4">
           <h3 className="font-bold text-white text-base flex items-center gap-2">
@@ -1120,6 +2034,121 @@ export default function LandlordInvoices({ landlordId }) {
             );
           })()}
         </div>
+
+        {/* Generator i Historia Raportów Finansowych (PDF) */}
+        <hr className="border-dark-800/80 my-5" />
+        <div className="space-y-4 font-sans">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-brand-400" />
+                Generator i Historia Raportów Finansowych (PDF)
+              </h4>
+              <p className="text-[10px] text-dark-400 mt-1 font-sans">
+                Wygeneruj pełne zestawienie bilansu Cash Flow dopasowane do aktualnie wybranych filtrów powyżej.
+              </p>
+            </div>
+            
+            <button
+              type="button"
+              disabled={generatingReport}
+              onClick={handleGenerateCashFlowReport}
+              className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 disabled:from-dark-800 disabled:to-dark-800 text-white rounded-xl text-xxs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-blue-950/20 font-sans"
+            >
+              {generatingReport ? (
+                <>
+                  <span className="w-3 h-3 border-2 border-white/35 border-t-white rounded-full animate-spin"></span>
+                  Generowanie...
+                </>
+              ) : (
+                <>
+                  <FileText className="w-3.5 h-3.5 text-white" />
+                  Generuj Raport Cash Flow (PDF)
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Active criteria pill badge */}
+          <div className="bg-dark-950/30 px-3 py-2 rounded-xl border border-dark-850 text-[10px] text-dark-300 flex flex-wrap gap-x-4 gap-y-1.5 font-mono">
+            <span className="font-sans font-bold text-dark-400 uppercase tracking-wider">Kryteria wydruku:</span>
+            <span>📍 Nieruchomość: <strong className="text-white font-sans">{
+              filterPropertyId !== "all" 
+                ? allLandlordProperties.find(p => p.id === filterPropertyId)?.title.split(",")[0] || "Mieszkanie"
+                : "Wgląd Ogólny"
+            }</strong></span>
+            <span>👤 Lokator: <strong className="text-white font-sans">{
+              filterTenantId !== "all"
+                ? allTenants.find(t => t.id === filterTenantId)?.name || "Lokator"
+                : "Wszyscy Lokatorzy"
+            }</strong></span>
+            <span>📅 Zakres: <strong className="text-white font-sans">{
+              (filterStartDate || filterEndDate)
+                ? `${filterStartDate || "od początku"} - ${filterEndDate || "teraz"}`
+                : "Cały okres"
+            }</strong></span>
+          </div>
+
+          {/* Snapshots register */}
+          <div className="space-y-2">
+            <h5 className="text-[10px] font-bold text-dark-500 uppercase tracking-wider">Historia wygenerowanych raportów</h5>
+            {cashFlowReports.length === 0 ? (
+              <p className="text-[10px] text-dark-450 italic font-sans">Brak wcześniej zapisanych raportów dla tej sesji.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-[10px] font-sans">
+                  <thead>
+                    <tr className="border-b border-dark-800 text-dark-500 font-bold uppercase tracking-wider">
+                      <th className="py-2">Nazwa Pliku Zestawienia</th>
+                      <th className="py-2">Rozmiar</th>
+                      <th className="py-2">Utworzono</th>
+                      <th className="py-2 text-center" style={{ width: "90px" }}>Akcje</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cashFlowReports.map(report => (
+                      <tr key={report.id} className="border-b border-dark-850/40 text-dark-300 hover:text-white transition-all">
+                        <td className="py-2 font-mono text-[9px] truncate max-w-[200px]" title={report.file_name}>
+                          {report.file_name.replace("Raport_CashFlow_", "").replace(".html", "").replace(/_/g, " ")}
+                        </td>
+                        <td className="py-2 font-mono text-[9px]">{report.file_size}</td>
+                        <td className="py-2 text-dark-400">
+                          {new Date(report.uploaded_at || report.uploadedAt).toLocaleString("pl-PL", {
+                            year: "numeric",
+                            month: "2-digit",
+                            day: "2-digit",
+                            hour: "2-digit",
+                            minute: "2-digit"
+                          })}
+                        </td>
+                        <td className="py-2">
+                          <div className="flex items-center justify-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openDocumentFile(report.file_data, report.file_name)}
+                              className="p-1.5 text-dark-400 hover:text-brand-400 hover:bg-dark-900 border border-dark-800 hover:border-brand-500 rounded transition-all cursor-pointer"
+                              title="Podejrzyj i drukuj PDF"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteReport(report.id)}
+                              className="p-1.5 text-dark-400 hover:text-red-400 hover:bg-dark-900 border border-dark-800 hover:border-red-500 rounded transition-all cursor-pointer"
+                              title="Usuń raport z dysku"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Expenses & Profitability Panel */}
@@ -1226,7 +2255,7 @@ export default function LandlordInvoices({ landlordId }) {
                 Zarejestruj Koszt (Remont / Ubezpieczenie / Doposażenie)
               </h4>
               
-              <form onSubmit={(e) => { handleAddExpense(e); setShowAddExpense(false); }} className="space-y-4">
+              <form onSubmit={(e) => { if (handleAddExpense(e)) { setShowAddExpense(false); } }} className="space-y-4">
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
                     <label className="block text-[10px] font-semibold text-dark-400 uppercase tracking-wider mb-1">Wybierz Mieszkanie *</label>
@@ -1504,147 +2533,7 @@ export default function LandlordInvoices({ landlordId }) {
         </div>
       )}
 
-      {/* Invoices List */}
-      <div className="glass p-6 rounded-2xl">
-        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-          <FileText className="w-5 h-5 text-brand-400" />
-          Rejestr Płatności
-        </h3>
-
-        {filteredInvoices.length === 0 ? (
-          <p className="text-dark-500 text-center py-6 text-sm">
-            {invoices.length === 0 
-              ? "Brak zarejestrowanych płatności w systemie." 
-              : "Brak płatności spełniających wybrane kryteria filtrowania."}
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-xs text-dark-300 min-w-[900px]">
-              <thead>
-                <tr className="border-b border-dark-800 text-[10px] font-bold text-dark-400 uppercase tracking-wider">
-                  <th className="pb-3">Tytuł Rachunku</th>
-                  <th className="pb-3">Mieszkanie / Najemca</th>
-                  <th className="pb-3 text-right">Czynsz najmu</th>
-                  <th className="pb-3 text-right">Czynsz admin.</th>
-                  <th className="pb-3 text-right">Opłata za media</th>
-                  <th className="pb-3 text-right text-brand-400 font-bold">Opłata (Suma)</th>
-                  <th className="pb-3 text-center">Termin</th>
-                  <th className="pb-3 text-center">Status</th>
-                  <th className="pb-3 text-right">Akcja</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-dark-800">
-                {filteredInvoices.map((inv) => {
-                  const prop = getPropertyById(inv.property_id);
-                  const tenant = getUserById(inv.tenant_id);
-                  const isPaid = inv.status === "paid";
-                  const isOverdue = inv.status === "overdue";
- 
-                  return (
-                    <tr key={inv.id} className="hover:bg-dark-900/30 transition-colors">
-                      <td className="py-3.5">
-                        <div className="font-bold text-white text-xs leading-tight">{inv.title}</div>
-                        <div className="text-[10px] text-dark-500 font-mono mt-1">ID: {inv.id}</div>
-                        {inv.notes && (
-                          <div className="text-[9px] text-dark-450 italic mt-1 bg-dark-950/40 p-1 rounded border border-dark-850 max-w-[180px] truncate" title={inv.notes}>
-                            📝 {inv.notes}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3.5">
-                        <div className="font-semibold text-white text-xs leading-tight">{prop ? prop.title.split(",")[0] : 'Nieruchomość'}</div>
-                        <div className="text-[10px] text-dark-500 mt-1">L: <strong className="text-brand-300 font-medium">{tenant ? tenant.name : 'brak'}</strong></div>
-                      </td>
-                      <td className="py-3.5 text-right font-mono text-white text-xs">
-                        {(inv.amountRent || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
-                      </td>
-                      <td className="py-3.5 text-right font-mono text-white text-xs">
-                        {(inv.amountAdmin || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
-                      </td>
-                      <td className="py-3.5 text-right font-mono text-brand-300 font-bold text-xs">
-                        {(inv.amountUtilities || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
-                      </td>
-                      <td className="py-3.5 text-right font-mono text-white font-black">
-                        <div className="text-xs">{(inv.amount || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</div>
-                        <div className="text-[9px] text-green-400 font-semibold mt-0.5">
-                          Wpłata: {(inv.receivedPayment || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
-                        </div>
-                        {(() => {
-                          const diff = (inv.receivedPayment || 0) - inv.amount;
-                          return (
-                            <div className="mt-0.5">
-                              {diff > 0 ? (
-                                <span className="text-[8px] font-bold text-green-400 bg-green-500/10 px-1 py-0.2 rounded">
-                                  Nadpłata: +{diff.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
-                                </span>
-                              ) : diff < 0 ? (
-                                <span className="text-[8px] font-bold text-red-400 bg-red-500/10 px-1 py-0.2 rounded">
-                                  Niedopłata: {diff.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
-                                </span>
-                              ) : (
-                                <span className="text-[8px] font-semibold text-dark-500">
-                                  Rozliczone
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      <td className="py-3.5 text-center text-xs">
-                        <span className="flex items-center justify-center gap-1 font-medium text-white">
-                          <Calendar className="w-3.5 h-3.5 text-dark-500" />
-                          {inv.due_date}
-                        </span>
-                        {(() => {
-                          const timeliness = getPaymentTimeliness(inv.due_date, inv.paymentDate, inv.status);
-                          if (!timeliness) return null;
-                          return (
-                            <div className="text-[9px] mt-1 text-center font-sans">
-                              <span className={timeliness.colorClass}>
-                                {timeliness.message}
-                              </span>
-                            </div>
-                          );
-                        })()}
-                      </td>
-                      <td className="py-3.5 text-center">
-                        <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
-                          isPaid 
-                            ? 'bg-green-500/10 text-green-400 border-green-500/20' 
-                            : isOverdue 
-                            ? 'bg-red-500/10 text-red-400 border-red-500/20 animate-pulse' 
-                            : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
-                        }`}>
-                          {isPaid ? "Opłacona" : isOverdue ? "Zaległa" : "Nieopłacona"}
-                        </span>
-                      </td>
-                      <td className="py-3.5 text-right font-sans">
-                        <button
-                          onClick={() => {
-                            setBookingInvoice(inv);
-                            setBookingAmount(inv.receivedPayment || inv.amount);
-                            setBookingDate(inv.paymentDate || new Date().toISOString().split('T')[0]);
-                            setBookingNotes(inv.notes || "");
-                            setShowBookingModal(true);
-                          }}
-                          className={`py-1 px-2.5 border rounded-xl text-xxs font-bold transition-all flex items-center gap-1 ml-auto cursor-pointer ${
-                            inv.receivedPayment > 0
-                              ? 'bg-brand-500/10 hover:bg-brand-500/25 border-brand-500/20 text-brand-300'
-                              : 'bg-green-500/10 hover:bg-green-500/25 border-green-500/20 text-green-400'
-                          }`}
-                        >
-                          <Check className="w-3 h-3" />
-                          {inv.receivedPayment > 0 ? "Edytuj wpłatę" : "Zaksięguj wpłatę"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {/* Invoices List was moved to position 2 */}
 
       {/* Booking Payment Modal Window */}
       {showBookingModal && bookingInvoice && (

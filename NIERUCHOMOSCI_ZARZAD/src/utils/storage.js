@@ -16,7 +16,8 @@ const KEYS = {
   MESSAGES: "rentportal_messages_v3",
   DOCUMENTS: "rentportal_documents_v3",
   EXPENSES: "rentportal_expenses_v3",
-  SESSION: "rentportal_session_v3"
+  SESSION: "rentportal_session_v3",
+  HANDOVER_PROTOCOLS: "rentportal_handover_protocols_v3"
 };
 
 // Cyrillic to Latin homoglyph mapping and name normalization for robust matching
@@ -541,7 +542,8 @@ export const updatePropertyTenant = (propertyId, tenantId, leaseStart = null, le
     ...properties[propIndex],
     tenant_id: tenantId,
     leaseStart,
-    leaseEnd
+    leaseEnd,
+    earlyTermination: null
   };
 
   if (rentAmount !== null) {
@@ -1120,7 +1122,8 @@ export const archiveTenant = (propertyId) => {
     tenant_id: null,
     leaseStart: null,
     leaseEnd: null,
-    paymentDueDay: null
+    paymentDueDay: null,
+    earlyTermination: null
   };
 
   saveItems(KEYS.PROPERTIES, properties);
@@ -1270,5 +1273,157 @@ export const updateMeterReadingValue = (readingId, newValue) => {
   window.dispatchEvent(new Event("rentportal_invoices_updated"));
   return meters[idx];
 };
+
+export const getHandoverProtocols = () => {
+  return JSON.parse(localStorage.getItem(KEYS.HANDOVER_PROTOCOLS) || "{}");
+};
+
+export const getHandoverProtocolByProperty = (propertyId) => {
+  const protocols = getHandoverProtocols();
+  const data = protocols[propertyId];
+  if (!data) return { initial: null, final: null };
+  
+  // Self-healing migration for old format
+  if (!data.initial && !data.final) {
+    return {
+      initial: data,
+      final: null
+    };
+  }
+  return {
+    initial: data.initial || null,
+    final: data.final || null
+  };
+};
+
+export const saveHandoverProtocol = (propertyId, type, protocolData) => {
+  const protocols = getHandoverProtocols();
+  let current = protocols[propertyId] || { initial: null, final: null };
+  
+  // Migrate old structure if it doesn't have initial/final properties
+  if (protocols[propertyId] && !protocols[propertyId].initial && !protocols[propertyId].final) {
+    current = { initial: protocols[propertyId], final: null };
+  }
+  
+  current[type] = protocolData;
+  protocols[propertyId] = current;
+  localStorage.setItem(KEYS.HANDOVER_PROTOCOLS, JSON.stringify(protocols));
+};
+
+export const deleteHandoverProtocolData = (propertyId) => {
+  const protocols = getHandoverProtocols();
+  delete protocols[propertyId];
+  localStorage.setItem(KEYS.HANDOVER_PROTOCOLS, JSON.stringify(protocols));
+};
+
+export const deleteHandoverProtocolDataByType = (propertyId, type) => {
+  const protocols = getHandoverProtocols();
+  let current = protocols[propertyId];
+  if (!current) return;
+  
+  // Migrate old format if necessary
+  if (!current.initial && !current.final) {
+    current = { initial: current, final: null };
+  }
+  
+  current[type] = null;
+  
+  // If both are null, delete key entirely
+  if (!current.initial && !current.final) {
+    delete protocols[propertyId];
+  } else {
+    protocols[propertyId] = current;
+  }
+  localStorage.setItem(KEYS.HANDOVER_PROTOCOLS, JSON.stringify(protocols));
+};
+
+export const saveHandoverProtocolMeterReadings = (propertyId, metersData, documentDate, landlordId) => {
+  const meters = getItems(KEYS.METERS);
+  
+  // Filter out any previous handover-generated meter readings for this property
+  const cleanedMeters = meters.filter(
+    m => !(m.property_id === propertyId && m.is_handover === true)
+  );
+
+  const newReadings = [];
+  const types = ["electricity", "gas", "water_hot", "water_cold", "heating"];
+  
+  types.forEach((type, idx) => {
+    const item = metersData[type];
+    if (item && item.value !== undefined && item.value !== null && item.value !== "") {
+      const val = Number(item.value);
+      if (!isNaN(val) && val >= 0) {
+        newReadings.push({
+          id: `met-handover-${type}-${Date.now()}-${idx}`,
+          property_id: propertyId,
+          meter_type: type,
+          meter_number: item.serial || "",
+          reading_value: val,
+          reading_date: documentDate || new Date().toISOString().split("T")[0],
+          reported_by_id: landlordId,
+          status: "approved",
+          is_handover: true,
+          notes: item.notes || "Z protokołu zdawczo-odbiorczego",
+          createdAt: new Date().toISOString()
+        });
+      }
+    }
+  });
+
+  const updatedMeters = [...cleanedMeters, ...newReadings];
+  saveItems(KEYS.METERS, updatedMeters);
+
+  window.dispatchEvent(new Event("rentportal_meters_updated"));
+  window.dispatchEvent(new Event("rentportal_invoices_updated"));
+};
+
+export const deleteHandoverProtocolMeterReadings = (propertyId) => {
+  const meters = getItems(KEYS.METERS);
+  const cleanedMeters = meters.filter(
+    m => !(m.property_id === propertyId && m.is_handover === true)
+  );
+  saveItems(KEYS.METERS, cleanedMeters);
+  
+  window.dispatchEvent(new Event("rentportal_meters_updated"));
+  window.dispatchEvent(new Event("rentportal_invoices_updated"));
+};
+
+export const registerEarlyTermination = (propertyId, terminationDate, penaltyAmount, fileUrl = null) => {
+  const properties = getProperties();
+  const propIndex = properties.findIndex(p => p.id === propertyId);
+  if (propIndex === -1) throw new Error("Nieruchomość nie istnieje.");
+  
+  properties[propIndex] = {
+    ...properties[propIndex],
+    earlyTermination: {
+      terminationDate,
+      penaltyAmount,
+      fileUrl,
+      registeredAt: new Date().toISOString()
+    }
+  };
+  
+  saveItems(KEYS.PROPERTIES, properties);
+  
+  window.dispatchEvent(new CustomEvent("rentportal_properties_updated"));
+  window.dispatchEvent(new CustomEvent("rentportal_users_updated"));
+};
+
+export const clearEarlyTermination = (propertyId) => {
+  const properties = getProperties();
+  const propIndex = properties.findIndex(p => p.id === propertyId);
+  if (propIndex === -1) throw new Error("Nieruchomość nie istnieje.");
+  
+  properties[propIndex] = {
+    ...properties[propIndex],
+    earlyTermination: null
+  };
+  
+  saveItems(KEYS.PROPERTIES, properties);
+  
+  window.dispatchEvent(new CustomEvent("rentportal_properties_updated"));
+  window.dispatchEvent(new CustomEvent("rentportal_users_updated"));
+};
+
 
 

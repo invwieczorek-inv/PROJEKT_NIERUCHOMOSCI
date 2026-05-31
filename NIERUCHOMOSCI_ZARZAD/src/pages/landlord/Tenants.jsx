@@ -905,6 +905,7 @@ function TenantNotesSection({ tenant }) {
   const [content, setContent] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [localNotes, setLocalNotes] = useState(tenant.notes || []);
+  const [localError, setLocalError] = useState("");
 
   useEffect(() => {
     setLocalNotes(tenant.notes || []);
@@ -913,6 +914,7 @@ function TenantNotesSection({ tenant }) {
   const handleAddNote = (e) => {
     e.preventDefault();
     if (!topic.trim() || !content.trim()) return;
+    setLocalError("");
     try {
       const newNote = addTenantNote(tenant.id, topic.trim(), content.trim());
       setLocalNotes(prev => [...prev, newNote]);
@@ -920,17 +922,18 @@ function TenantNotesSection({ tenant }) {
       setContent("");
       setShowAddForm(false);
     } catch (err) {
-      console.error(err);
+      setLocalError("Błąd dodawania notatki: " + err.message);
     }
   };
 
   const handleDeleteNote = (noteId) => {
     if (!window.confirm("Czy na pewno chcesz usunąć tę notatkę?")) return;
+    setLocalError("");
     try {
       deleteTenantNote(tenant.id, noteId);
       setLocalNotes(prev => prev.filter(n => n.id !== noteId));
     } catch (err) {
-      console.error(err);
+      setLocalError("Błąd usuwania notatki: " + err.message);
     }
   };
 
@@ -953,6 +956,13 @@ function TenantNotesSection({ tenant }) {
           {showAddForm ? "Anuluj" : "+ Dodaj notatkę"}
         </button>
       </div>
+
+      {localError && (
+        <div className="bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl p-2.5 text-xxs flex items-center justify-between gap-2 animate-fade-in font-sans">
+          <span>{localError}</span>
+          <button type="button" onClick={() => setLocalError("")} className="text-dark-400 hover:text-white font-bold shrink-0">✕</button>
+        </div>
+      )}
 
       {showAddForm && (
         <form onSubmit={handleAddNote} className="space-y-2 bg-dark-950/80 p-2.5 rounded-xl border border-brand-500/20 text-xxs animate-fade-in">

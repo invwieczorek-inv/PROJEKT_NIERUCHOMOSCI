@@ -8,6 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: './',
   plugins: [
     react(),
     {
@@ -86,5 +87,26 @@ export default defineConfig({
   server: {
     port: 3457,
     strictPort: true
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
+              return 'react-vendor';
+            }
+            if (id.includes('docxtemplater') || id.includes('pizzip')) {
+              return 'word-vendor';
+            }
+            if (id.includes('lucide')) {
+              return 'lucide-vendor';
+            }
+            return 'vendor';
+          }
+        }
+      }
+    },
+    chunkSizeWarningLimit: 800
   }
 })

@@ -54,6 +54,8 @@ export default function LandlordDashboard({ activeUser }) {
   const [profileName, setProfileName] = useState(activeUser.name || "");
   const [profilePhone, setProfilePhone] = useState(activeUser.phone || "");
   const [profileEmail, setProfileEmail] = useState(activeUser.email || "");
+  const [profileAddress, setProfileAddress] = useState(activeUser.addressStreet || "");
+  const [profilePostalCodeCity, setProfilePostalCodeCity] = useState(activeUser.postalCodeCity || "");
 
   // Sync profile states with activeUser changes
   useEffect(() => {
@@ -61,6 +63,8 @@ export default function LandlordDashboard({ activeUser }) {
       setProfileName(activeUser.name || "");
       setProfilePhone(activeUser.phone || "");
       setProfileEmail(activeUser.email || "");
+      setProfileAddress(activeUser.addressStreet || "");
+      setProfilePostalCodeCity(activeUser.postalCodeCity || "");
     }
   }, [activeUser]);
 
@@ -70,7 +74,9 @@ export default function LandlordDashboard({ activeUser }) {
       updateUserProfile(activeUser.id, {
         name: profileName.trim(),
         phone: profilePhone.trim(),
-        email: profileEmail.trim()
+        email: profileEmail.trim(),
+        addressStreet: profileAddress.trim(),
+        postalCodeCity: profilePostalCodeCity.trim()
       });
       setSuccessToast("Profil zarządcy został zaktualizowany!");
       setTimeout(() => setSuccessToast(""), 3000);
@@ -562,7 +568,31 @@ export default function LandlordDashboard({ activeUser }) {
               />
             </div>
 
-            <div className="sm:col-span-3 flex justify-end">
+            <div className="sm:col-span-2">
+              <label className="block text-[9px] font-bold text-dark-400 uppercase tracking-wider mb-1">Adres (Ulica i numer) *</label>
+              <input
+                type="text"
+                required
+                value={profileAddress}
+                onChange={(e) => setProfileAddress(e.target.value)}
+                placeholder="np. ul. Floriańska 12/3"
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="sm:col-span-1">
+              <label className="block text-[9px] font-bold text-dark-400 uppercase tracking-wider mb-1">Kod pocztowy i Miasto *</label>
+              <input
+                type="text"
+                required
+                value={profilePostalCodeCity}
+                onChange={(e) => setProfilePostalCodeCity(e.target.value)}
+                placeholder="np. 31-021 Kraków"
+                className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-white focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="sm:col-span-3 flex justify-end pt-2">
               <button
                 type="submit"
                 className="py-2 px-4 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-bold transition-all cursor-pointer shadow-lg w-fit"

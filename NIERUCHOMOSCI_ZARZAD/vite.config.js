@@ -23,6 +23,9 @@ export default defineConfig({
               try {
                 const { fileName, fileData } = JSON.parse(body);
                 
+                // Sanitize fileName to prevent path traversal
+                const safeFileName = path.basename(fileName);
+                
                 // Decode base64 data URL
                 const matches = fileData.match(/^data:(.+);base64,(.+)$/);
                 if (!matches) {
@@ -40,11 +43,11 @@ export default defineConfig({
                   fs.mkdirSync(dir, { recursive: true });
                 }
                 
-                const filePath = path.join(dir, fileName);
+                const filePath = path.join(dir, safeFileName);
                 fs.writeFileSync(filePath, buffer);
                 
                 // Return the static link relative to public
-                const fileUrl = `/generated_docs/${fileName}`;
+                const fileUrl = `/generated_docs/${safeFileName}`;
                 
                 res.statusCode = 200;
                 res.setHeader('Content-Type', 'application/json');
@@ -57,15 +60,15 @@ export default defineConfig({
             });
           } else if (req.url.startsWith('/generated_docs/') && req.url.includes('.docx') && req.method === 'GET') {
             const urlPath = decodeURIComponent(req.url.split('?')[0]);
-            const filePath = path.resolve(__dirname, 'public', urlPath.slice(1));
+            const safeFileName = path.basename(urlPath);
+            const filePath = path.join(__dirname, 'public/generated_docs', safeFileName);
             if (fs.existsSync(filePath)) {
               const stat = fs.statSync(filePath);
-              const fileName = path.basename(filePath);
               
               res.statusCode = 200;
               res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
               res.setHeader('Content-Length', stat.size);
-              res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`);
+              res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeFileName)}"`);
               
               const stream = fs.createReadStream(filePath);
               stream.pipe(res);

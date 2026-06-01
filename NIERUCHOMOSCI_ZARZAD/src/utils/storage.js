@@ -638,6 +638,13 @@ export const addInvoice = (invoiceData) => {
   return newInvoice;
 };
 
+export const deleteInvoice = (invoiceId) => {
+  const invoices = getInvoices();
+  const filtered = invoices.filter(i => i.id !== invoiceId);
+  saveItems(KEYS.INVOICES, filtered);
+  window.dispatchEvent(new Event("rentportal_invoices_updated"));
+};
+
 export const bookInvoicePayment = (invoiceId, receivedAmount, paymentDate = null, notes = null) => {
   const invoices = getInvoices();
   const index = invoices.findIndex(i => i.id === invoiceId);
@@ -809,6 +816,45 @@ export const deleteDocument = (docId) => {
   // Force reactiveness across both panels
   window.dispatchEvent(new Event("rentportal_users_updated"));
   window.dispatchEvent(new Event("rentportal_properties_updated"));
+};
+
+// Triggers a direct download of a Base64 DataURL or a static file path to the user's hard drive
+export const downloadDocumentFile = (url, fileName) => {
+  try {
+    if (!url.startsWith("data:")) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName || "dokument.html";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
+    const arr = url.split(',');
+    const mime = arr[0].match(/:(.*?);/)[1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    
+    const blob = new Blob([u8arr], { type: mime });
+    const blobUrl = URL.createObjectURL(blob);
+    
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = fileName || "dokument.html";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 200);
+  } catch (err) {
+    console.error("[RentPortal] Direct download failed, falling back to new tab:", err);
+    window.open(url, "_blank");
+  }
 };
 
 // Converts Base64 DataURL into a trusted browser Blob URL and opens it safely in a new tab
@@ -1423,6 +1469,112 @@ export const clearEarlyTermination = (propertyId) => {
   
   window.dispatchEvent(new CustomEvent("rentportal_properties_updated"));
   window.dispatchEvent(new CustomEvent("rentportal_users_updated"));
+};
+
+// ==========================================
+// DUNNING / WINDYKACJA ENGINE
+// ==========================================
+export const checkAndRunDunning = (landlordId) => {
+  const invoices = getInvoices();
+  let updated = false;
+  
+  // Find all unpaid or partially paid invoices belonging to landlord
+  const activeOverdue = invoices.filter(inv => 
+    (inv.status === "unpaid" || inv.status === "partial") && 
+    inv.landlord_id === landlordId
+  );
+  
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  
+  activeOverdue.forEach(inv => {
+    if (!inv.due_date) return;
+    
+    const due = new Date(inv.due_date);
+    due.setHours(0,0,0,0);
+    
+    const diffTime = today.getTime() - due.getTime();
+    const delayDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    
+    // T+3: Soft Reminder (miękkie upomnienie)
+    if (delayDays >= 3 && !inv.dunningSoftReminderSent) {
+      // Send chat message automatically
+      sendMessage({
+        sender_id: inv.landlord_id,
+        receiver_id: inv.tenant_id,
+        property_id: inv.property_id,
+        subject: "Rozliczenia",
+        text: `[MIĘKKIE UPOMNIENIE] Przypominamy o zaległości w płatności za rachunek "${inv.title}" na kwotę ${inv.amount} PLN. Termin płatności minął dnia ${inv.due_date} (opóźnienie: ${delayDays} dni). Prosimy o uregulowanie płatności na wskazany w umowie rachunek bankowy.`,
+        attachment_name: null,
+        attachment_data: null
+      });
+      
+      inv.dunningSoftReminderSent = true;
+      inv.dunningSoftReminderDate = new Date().toISOString();
+      updated = true;
+    }
+    
+    // T+10: Formal Demand (Formalne wezwanie do zapłaty)
+    if (delayDays >= 10 && (!inv.dunningFormalNoticeStatus || inv.dunningFormalNoticeStatus === "none")) {
+      inv.dunningFormalNoticeStatus = "pending";
+      updated = true;
+    }
+  });
+  
+  if (updated) {
+    saveItems(KEYS.INVOICES, invoices);
+    window.dispatchEvent(new Event("rentportal_invoices_updated"));
+    window.dispatchEvent(new Event("rentportal_messages_updated"));
+  }
+};
+
+export const approveAndSendFormalNotice = (invoiceId, fileUrl, fileName, htmlLength) => {
+  const invoices = getInvoices();
+  const idx = invoices.findIndex(i => i.id === invoiceId);
+  if (idx === -1) throw new Error("Faktura nie istnieje.");
+  
+  const inv = invoices[idx];
+  
+  // Register formal document
+  addDocument({
+    property_id: inv.property_id,
+    tenant_id: inv.tenant_id,
+    document_type: "dunning_formal_notice",
+    file_name: fileName,
+    file_size: (htmlLength / 1024).toFixed(1) + " KB",
+    file_data: fileUrl
+  });
+  
+  // Send formal chat message with attachment
+  sendMessage({
+    sender_id: inv.landlord_id,
+    receiver_id: inv.tenant_id,
+    property_id: inv.property_id,
+    subject: "Rozliczenia",
+    text: `[FORMALNE PRZEDSĄDOWE WEZWANIE DO ZAPŁATY] W związku z zaległością płatniczą za rachunek "${inv.title}" przekraczającą 10 dni, przesyłamy oficjalne ostateczne przedsądowe wezwanie do zapłaty. Należną kwotę prosimy wpłacić w ciągu 7 dni. Dokument wezwania w formacie PDF/HTML został dołączony do niniejszej wiadomości.`,
+    attachment_name: fileName,
+    attachment_data: fileUrl
+  });
+
+  // Add informational entry in the tenant's registry of notes (REJESTR USTALEŃ I NOTATEK)
+  try {
+    addTenantNote(
+      inv.tenant_id, 
+      "Wystawiono Formalne Wezwanie do Zapłaty", 
+      `Dnia ${new Date().toLocaleDateString("pl-PL")} wystawiono i wysłano oficjalne ostateczne przedsądowe wezwanie do zapłaty (Monit ID: WZP-${inv.id}) dotyczące zaległości za rachunek "${inv.title}" na kwotę ${inv.amount.toFixed(2)} PLN (pozostało do zapłaty: ${(inv.amount - (inv.receivedPayment || 0)).toFixed(2)} PLN). Plik wezwania został załączony w komunikatorze.`
+    );
+  } catch (err) {
+    console.error("[Dunning] Error adding collection note to tenant:", err);
+  }
+  
+  // Update invoice dunning status
+  inv.dunningFormalNoticeStatus = "sent";
+  inv.dunningFormalNoticeFileUrl = fileUrl;
+  inv.dunningFormalNoticeSentDate = new Date().toISOString();
+  
+  saveItems(KEYS.INVOICES, invoices);
+  window.dispatchEvent(new Event("rentportal_invoices_updated"));
+  window.dispatchEvent(new Event("rentportal_messages_updated"));
 };
 
 

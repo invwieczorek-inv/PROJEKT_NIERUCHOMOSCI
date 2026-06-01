@@ -16,6 +16,7 @@ import {
   deleteProperty,
   updateTenantSummary,
   getInvoicesForTenant,
+  getPaymentTimeliness,
   getPropertyById,
   addMeterReading,
   getHandoverProtocolByProperty,
@@ -4659,46 +4660,150 @@ function TenantNotesSection({ tenant }) {
 }
 
 function generateDraftSummary(tenant) {
-  const notesCount = (tenant.notes || []).length;
-  const noteTopics = (tenant.notes || []).map(n => `"${n.title}"`).join(", ");
-  
+  const notes = tenant.notes || [];
   const invoices = getInvoicesForTenant(tenant.id) || [];
-  const totalInvoices = invoices.length;
   
-  let timelinessText = "Brak zarejestrowanej historii płatności.";
-  if (totalInvoices > 0) {
-    const latePayments = invoices.filter(i => {
-      if (i.status !== "paid" || !i.paymentDate || !i.dueDate) return false;
-      return new Date(i.paymentDate) > new Date(i.dueDate);
-    }).length;
+  // 1. ANALIZA TERMINOWOŚCI WPŁAT (LOGI)
+  const totalInvoices = invoices.length;
+  let paidOnTime = 0;
+  let paidLate = 0;
+  let unpaid = 0;
+  let partial = 0;
+  let delayLogs = [];
+
+  // Sort invoices chronologically by month
+  const sortedInvoices = [...invoices].sort((a, b) => a.month.localeCompare(b.month));
+
+  sortedInvoices.forEach(inv => {
+    const timeliness = getPaymentTimeliness(inv.due_date, inv.paymentDate, inv.status);
+    let statusLabel = "";
     
-    if (latePayments === 0) {
-      timelinessText = "Płatności były regulowane w 100% terminowo i rzetelnie.";
+    if (inv.status === "paid") {
+      if (timeliness && timeliness.isDelayed) {
+        paidLate++;
+        statusLabel = `🔴 OPŁACONO Z OPÓŹNIENIEM o ${timeliness.days} dni (wpłata: ${inv.paymentDate}, termin: ${inv.due_date})`;
+      } else {
+        paidOnTime++;
+        const daysEarly = timeliness && timeliness.days < 0 ? ` (przed czasem o ${Math.abs(timeliness.days)} dni)` : "";
+        statusLabel = `🟢 OPŁACONO W TERMINIE${daysEarly} (wpłata: ${inv.paymentDate || "zaksięgowana"}, termin: ${inv.due_date})`;
+      }
+    } else if (inv.status === "partial") {
+      partial++;
+      statusLabel = `🟡 CZĘŚCIOWA WPŁATA (wpłacono: ${inv.paidAmount || 0} z ${inv.amount} PLN, termin: ${inv.due_date})`;
     } else {
-      timelinessText = `Regulowanie opłat z opóźnieniami (${latePayments} opóźnionych płatności na ${totalInvoices} faktur).`;
+      unpaid++;
+      const overdueDays = timeliness && timeliness.isDelayed ? ` (spóźnienie: ${timeliness.days} dni)` : "";
+      statusLabel = `❌ NIEOPŁACONA${overdueDays} (kwota: ${inv.amount} PLN, termin: ${inv.due_date})`;
+    }
+
+    delayLogs.push(`- Rachunek za [${inv.month}]: ${statusLabel}`);
+  });
+
+  let timelinessSummary = "";
+  if (totalInvoices === 0) {
+    timelinessSummary = "Brak zarejestrowanej historii finansowej (faktur).";
+  } else {
+    const onTimePct = Math.round((paidOnTime / totalInvoices) * 100);
+    timelinessSummary = `Statystyka: ${paidOnTime} / ${totalInvoices} opłacone w terminie (${onTimePct}%). `;
+    if (unpaid > 0 || partial > 0) {
+      timelinessSummary += `⚠️ Uwaga! Lokator posiada ${unpaid} nieopłaconych oraz ${partial} częściowo opłaconych rachunków.`;
+    } else if (paidLate > 0) {
+      timelinessSummary += `Wystąpiły opóźnienia w płatnościach (${paidLate} razy).`;
+    } else {
+      timelinessSummary += `Wzorowa i nienaganna dyscyplina finansowa.`;
     }
   }
 
-  let notesText = "Brak odnotowanych uwag lub incydentów w rejestrze notatek.";
-  if (notesCount > 0) {
-    notesText = `W trakcie najmu sporządzono ${notesCount} notatek (dotyczących m.in.: ${noteTopics}).\n`;
-    const contentSummaries = (tenant.notes || []).map(n => `- ${n.title}: ${n.content.slice(0, 80)}${n.content.length > 80 ? '...' : ''}`).join("\n");
-    notesText += `Szczegóły zdarzeń:\n${contentSummaries}`;
+  // 2. ANALIZA KULTURY WSPÓŁPRACY
+  const cultureKeywords = ["kultur", "współprac", "komunikac", "kontakt", "zachowan", "kulturaln", "uprzejm", "problem", "konflikt", "krzyk", "agresywn"];
+  const cultureNotes = notes.filter(note => {
+    const text = `${note.title} ${note.content}`.toLowerCase();
+    return cultureKeywords.some(kw => text.includes(kw));
+  });
+
+  let cultureSummary = "";
+  let cultureLogs = [];
+  let isPositiveCulture = true;
+
+  if (cultureNotes.length === 0) {
+    cultureSummary = "Brak specyficznych uwag dotyczących kultury współpracy w notatkach. Komunikacja przebiegała w sposób standardowy.";
+  } else {
+    cultureNotes.forEach(n => {
+      const text = `${n.title} ${n.content}`.toLowerCase();
+      const hasNegative = ["konflikt", "problem", "trudny", "agresywn", "krzyk", "skarg"].some(kw => text.includes(kw));
+      if (hasNegative) isPositiveCulture = false;
+      
+      const dateStr = n.createdAt ? new Date(n.createdAt).toLocaleDateString("pl-PL") : "Brak daty";
+      cultureLogs.push(`- [${dateStr}] ${n.title}: ${n.content}`);
+    });
+
+    cultureSummary = isPositiveCulture 
+      ? "Lokator wykazywał się wysoką kulturą osobistą, a współpraca przebiegała w przyjaznej, ugodowej atmosferze." 
+      : "Zarejestrowano incydenty lub utrudnienia we współpracy / komunikacji (wymagało interwencji).";
   }
 
-  return `PODSUMOWANIE LOKATORA: ${tenant.name.toUpperCase()}
+  // 3. ANALIZA SPOSOBU DBANIA O LOKAL (WIZYTY KONTROLNE)
+  const careKeywords = ["kontro", "wizyt", "stan lok", "dban", "czyst", "porząd", "brud", "zniszcz", "uszkodz", "zalani", "inspekcj"];
+  const careNotes = notes.filter(note => {
+    const text = `${note.title} ${note.content}`.toLowerCase();
+    return careKeywords.some(kw => text.includes(kw));
+  });
 
-1. RZETELNOŚĆ I TERMINOWOŚĆ FINANSOWA:
-${timelinessText}
+  let careSummary = "";
+  let careLogs = [];
+  let isGoodCare = true;
 
-2. ZACHOWANIE I RELACJE (NA PODSTAWIE NOTATEK):
-${notesText}
+  if (careNotes.length === 0) {
+    careSummary = "Brak wpisów z wizyt kontrolnych w rejestrze. Sposób dbania o lokal nie był szczegółowo raportowany podczas trwania umowy.";
+  } else {
+    careNotes.forEach(n => {
+      const text = `${n.title} ${n.content}`.toLowerCase();
+      const hasNegative = ["brud", "zniszcz", "uszkodz", "niedba", "zaniedba", "syf", "bałag"].some(kw => text.includes(kw));
+      if (hasNegative) isGoodCare = false;
+      
+      const dateStr = n.createdAt ? new Date(n.createdAt).toLocaleDateString("pl-PL") : "Brak daty";
+      careLogs.push(`- [${dateStr}] ${n.title}: ${n.content}`);
+    });
 
-3. SPOSÓB ROZWIĄZYWANIA KONFLIKTÓW I CECHY OSOBISTE:
-Lokator w komunikacji jest... [opisz np. ugodowy / wymagający / bezkonfliktowy]. Wszelkie usterki zgłaszał...
+    careSummary = isGoodCare 
+      ? "Stan lokalu podczas wizyt kontrolnych był oceniany bardzo dobrze. Lokator dbał o czystość, porządek i wyposażenie lokalu w sposób odpowiedzialny." 
+      : "Odnotowano uchybienia w dbałości o lokal, stwierdzono zanieczyszczenia lub uszkodzenia sprzętu w trakcie trwania umowy.";
+  }
+
+  // 4. REKOMENDACJA KOŃCOWA
+  let recommendation = "";
+  if (unpaid > 0 || partial > 0) {
+    recommendation = "NIE POLECAM tego najemcy ze względu na zaległości finansowe i nieuregulowane rachunki.";
+  } else if (paidLate > 1 || !isPositiveCulture || !isGoodCare) {
+    recommendation = "Najemca poprawny, ale wymagał dyscyplinowania płatniczego lub zwracania uwagi na kwestie porządkowe/komunikacyjne.";
+  } else {
+    recommendation = "ZDECYDOWANIE POLECAM tego lokatora. Wzorowa terminowość wpłat, wysoka kultura osobista oraz wzorowa dbałość o czystość i stan lokalu.";
+  }
+
+  // BUILD INTELLECTUAL DRAFT TEXT
+  return `INTELIGENTNE PODSUMOWANIE LOKATORA: ${tenant.name.toUpperCase()}
+Sporządzono dnia: ${new Date().toLocaleDateString("pl-PL")}
+
+1. REJESTR I ANALIZA TERMINOWOŚCI WPŁAT:
+Podsumowanie: ${timelinessSummary}
+
+Logi rozliczeniowe (historia faktur):
+${delayLogs.length > 0 ? delayLogs.join("\n") : "- Brak historii płatności."}
+
+2. KULTURA WSPÓŁPRACY I KOMUNIKACJA:
+Podsumowanie: ${cultureSummary}
+
+Odnotowane logi z notatek:
+${cultureLogs.length > 0 ? cultureLogs.join("\n") : "- Brak specyficznych notatek w tej kategorii."}
+
+3. SPOSÓB DBANIA O LOKAL (WIZYTY KONTROLNE):
+Podsumowanie: ${careSummary}
+
+Rejestr wizyt kontrolnych i inspekcji:
+${careLogs.length > 0 ? careLogs.join("\n") : "- Brak wpisów z kontroli."}
 
 4. REKOMENDACJA KOŃCOWA:
-[Wpisz np. Zdecydowanie polecam tego najemcę kolejnym wynajmującym. / Najemca poprawny, ale wymagał dyscyplinowania płatniczego.]`;
+${recommendation}`;
 }
 
 export function TenantFinalSummarySection({ tenant }) {

@@ -4,7 +4,12 @@ import {
   sendMessage, 
   markMessagesAsRead,
   getPropertiesByLandlord,
-  getUserById
+  getUserById,
+  checkAndRunDunning,
+  approveAndSendFormalNotice,
+  openDocumentFile,
+  getInvoicesForTenant,
+  downloadDocumentFile
 } from "../../utils/storage";
 import { 
   MessageSquare, 
@@ -16,8 +21,301 @@ import {
   Paperclip, 
   X, 
   Download,
-  XCircle
+  XCircle,
+  FileText,
+  Eye
 } from "lucide-react";
+
+export const generateFormalNoticeHtml = (invoice, tenant, landlord, property) => {
+  const todayStr = new Date().toLocaleDateString("pl-PL", {
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+
+  const leaseStartStr = property.leaseStart 
+    ? new Date(property.leaseStart).toLocaleDateString("pl-PL")
+    : "___";
+
+  const outstanding = invoice.amount - (invoice.receivedPayment || 0);
+
+  // Extract city of residence from landlord's postalCodeCity
+  let issueCity = "Kraków";
+  if (landlord && landlord.postalCodeCity) {
+    const cleanedCity = landlord.postalCodeCity
+      .replace(/^\d{2}-\d{3}\s*/, "") // matches standard Polish XX-XXX postal code
+      .replace(/^\d{5}\s*/, "")        // matches standard XXXXX postal code
+      .trim();
+    if (cleanedCity) {
+      issueCity = cleanedCity;
+    }
+  }
+
+  return `
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Formalne Wezwanie do Zapłaty</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    
+    body {
+      font-family: 'Inter', sans-serif;
+      color: #1e293b;
+      line-height: 1.6;
+      background-color: #ffffff;
+      margin: 0;
+      padding: 0;
+    }
+    
+    .page {
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 50px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+      position: relative;
+    }
+    
+    .print-btn {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background-color: #d97706;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+      z-index: 100;
+      transition: background-color 0.2s;
+    }
+    
+    .print-btn:hover {
+      background-color: #b45309;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 40px;
+      font-size: 13px;
+    }
+    
+    .date-place {
+      text-align: right;
+    }
+    
+    .parties {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 50px;
+      gap: 40px;
+    }
+    
+    .party-box {
+      flex: 1;
+      padding: 15px;
+      background-color: #f8fafc;
+      border-radius: 8px;
+      border: 1px solid #f1f5f9;
+      font-size: 13px;
+    }
+    
+    .party-title {
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 11px;
+      color: #64748b;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+    
+    .doc-title {
+      text-align: center;
+      font-size: 20px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 40px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 2px solid #e2e8f0;
+      padding-bottom: 15px;
+    }
+    
+    .content-text {
+      font-size: 14px;
+      text-align: justify;
+      margin-bottom: 30px;
+    }
+    
+    .invoice-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 25px 0;
+      font-size: 13px;
+    }
+    
+    .invoice-table th, .invoice-table td {
+      border: 1px solid #e2e8f0;
+      padding: 12px;
+      text-align: left;
+    }
+    
+    .invoice-table th {
+      background-color: #f8fafc;
+      color: #475569;
+      font-weight: 600;
+    }
+    
+    .highlight-row {
+      background-color: #fffbeb;
+      font-weight: 700;
+      color: #b45309;
+    }
+    
+    .warning-box {
+      background-color: #fef2f2;
+      border-left: 4px solid #ef4444;
+      padding: 15px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #991b1b;
+      margin-bottom: 30px;
+    }
+    
+    .signatures {
+      margin-top: 60px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+    
+    .signature-line {
+      width: 200px;
+      border-top: 1px dashed #94a3b8;
+      text-align: center;
+      padding-top: 8px;
+      margin-top: 50px;
+      color: #64748b;
+    }
+    
+    @media print {
+      body {
+        background-color: white;
+      }
+      .page {
+        border: none;
+        box-shadow: none;
+        margin: 0;
+        padding: 20px;
+      }
+      .print-btn {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <button class="print-btn" onclick="window.print()">🖨️ Drukuj / Zapisz PDF</button>
+
+  <div class="page">
+    <div class="header">
+      <div>
+        <strong>System RentPortal</strong><br>
+        Monit Windykacyjny ID: WZP-${invoice.id}
+      </div>
+      <div class="date-place">
+        ${issueCity}, dnia ${todayStr}
+      </div>
+    </div>
+    
+    <div class="parties">
+      <div class="party-box">
+        <div class="party-title">Wzywający (Wynajmujący)</div>
+        <strong>${landlord.name || "Krzysztof"}</strong><br>
+        ${landlord.addressStreet ? `${landlord.addressStreet}<br>` : ""}
+        ${landlord.postalCodeCity ? `${landlord.postalCodeCity}<br>` : ""}
+        Telefon: ${landlord.phone || "+48 501 234 567"}<br>
+        E-mail: ${landlord.email || "krzysztof@wlasciciel.pl"}
+      </div>
+      <div class="party-box">
+        <div class="party-title">Wezwany (Najemca)</div>
+        <strong>${tenant.name}</strong><br>
+        Meldunek: ${tenant.address || "Brak adresu zameldowania"}<br>
+        Dowód: ${tenant.idCard || "Brak serii dowodu"}<br>
+        Telefon: ${tenant.phone || "Brak telefonu"}
+      </div>
+    </div>
+    
+    <div class="doc-title">
+      Ostateczne Przedsądowe Wezwanie do Zapłaty
+    </div>
+    
+    <div class="content-text">
+      Działając w imieniu własnym jako Wynajmujący lokal mieszkalny przy <strong>ul. ${property.address}, ${property.city}</strong>, na podstawie zawartej umowy najmu z dnia ${leaseStartStr} r., <strong>niniejszym ostatecznie wzywam Pana/Panią do zapłaty</strong> wymagalnego zadłużenia z tytułu opłat czynszowych i eksploatacyjnych.
+    </div>
+    
+    <div class="content-text">
+      Stan zadłużenia na dzień sporządzenia wezwania przedstawia się następująco:
+    </div>
+    
+    <table class="invoice-table">
+      <thead>
+        <tr>
+          <th>Tytuł dokumentu</th>
+          <th>Termin płatności</th>
+          <th>Kwota całkowita</th>
+          <th>Wpłacono</th>
+          <th>Do zapłaty</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>${invoice.title}</td>
+          <td>${invoice.due_date}</td>
+          <td>${invoice.amount.toFixed(2)} PLN</td>
+          <td>${(invoice.receivedPayment || 0).toFixed(2)} PLN</td>
+          <td style="color: #ef4444; font-weight: 600;">${outstanding.toFixed(2)} PLN</td>
+        </tr>
+        <tr class="highlight-row">
+          <td colspan="4" style="text-align: right;">ŁĄCZNA KWOTA DO ZAPŁATY:</td>
+          <td>${outstanding.toFixed(2)} PLN</td>
+        </tr>
+      </tbody>
+    </table>
+    
+    <div class="warning-box">
+      <strong>UWAGA:</strong> Wyżej wymienioną kwotę zaległości należy uregulować w nieprzekraczalnym terminie <strong>7 dni</strong> od daty doręczenia niniejszego wezwania, dokonując przelewu na konto bankowe wskazane w umowie najmu.
+    </div>
+    
+    <div class="content-text">
+      Brak uregulowania pełnej kwoty zadłużenia w wyżej zakreślonym terminie skutkować będzie <strong>skierowaniem sprawy na drogę postępowania sądowego</strong> w celu przymusowego dochodzenia należności, co znacznie zwiększy wysokość zadłużenia o koszty sądowe, koszty zastępstwa procesowego (adwokackie) oraz odsetki ustawowe za opóźnienie. 
+    </div>
+    
+    <div class="content-text">
+      Niniejsze wezwanie jest wezwaniem ostatecznym przed wytoczeniem powództwa. W przypadku uregulowania należności w ostatnich dniach, prosimy o przesłanie potwierdzenia przelewu w panelu konwersacji.
+    </div>
+    
+    <div class="signatures">
+      <div>
+        <div class="signature-line">Podpis Najemcy<br>(Potwierdzenie odbioru)</div>
+      </div>
+      <div>
+        <div class="signature-line">Podpis Wynajmującego</div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
+  `;
+};
 
 const THREADS = [
   { id: "Usterki", label: "🛠️ Usterki i naprawy" },
@@ -37,11 +335,19 @@ export default function LandlordMessages({ landlordId }) {
   const [selectedImageName, setSelectedImageName] = useState("");
   const [activeLightbox, setActiveLightbox] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
+  const [pendingMonits, setPendingMonits] = useState([]);
   
   const fileInputRef = useRef(null);
   const chatEndRef = useRef(null);
 
   useEffect(() => {
+    // Run dunning engine checks on mount
+    try {
+      checkAndRunDunning(landlordId);
+    } catch (err) {
+      console.error("[Dunning] Error running collection engine:", err);
+    }
+
     const props = getPropertiesByLandlord(landlordId);
     setProperties(props);
 
@@ -66,6 +372,20 @@ export default function LandlordMessages({ landlordId }) {
     }
   }, [landlordId]);
 
+  const loadPendingMonits = () => {
+    if (selectedTenant) {
+      const invoices = getInvoicesForTenant(selectedTenant.id) || [];
+      const pending = invoices.filter(inv => inv.dunningFormalNoticeStatus === "pending");
+      setPendingMonits(pending);
+    } else {
+      setPendingMonits([]);
+    }
+  };
+
+  useEffect(() => {
+    loadPendingMonits();
+  }, [selectedTenant]);
+
   useEffect(() => {
     if (selectedTenant) {
       // Get messages
@@ -79,8 +399,95 @@ export default function LandlordMessages({ landlordId }) {
   }, [landlordId, selectedTenant, activeThread]);
 
   useEffect(() => {
+    const handleInvoiceUpdate = () => {
+      loadPendingMonits();
+      if (selectedTenant) {
+        const list = getMessagesBetweenUsers(landlordId, selectedTenant.id)
+          .filter(m => m.subject === activeThread);
+        setMessages(list);
+      }
+    };
+    window.addEventListener("rentportal_invoices_updated", handleInvoiceUpdate);
+    window.addEventListener("rentportal_messages_updated", handleInvoiceUpdate);
+    return () => {
+      window.removeEventListener("rentportal_invoices_updated", handleInvoiceUpdate);
+      window.removeEventListener("rentportal_messages_updated", handleInvoiceUpdate);
+    };
+  }, [landlordId, selectedTenant, activeThread]);
+
+  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const handlePreviewFormalNotice = (inv) => {
+    try {
+      const tenant = selectedTenant;
+      const landlord = getUserById(landlordId);
+      const property = selectedProperty;
+      
+      if (!tenant || !landlord || !property) {
+        throw new Error("Brak kompletnych danych do wygenerowania wezwania.");
+      }
+
+      const htmlContent = generateFormalNoticeHtml(inv, tenant, landlord, property);
+      const base64Data = "data:text/html;base64," + btoa(unescape(encodeURIComponent(htmlContent)));
+      const fileName = `Wezwanie_do_zaplaty_PODGLAD_${tenant.name.replace(/\s+/g, "_")}.html`;
+      
+      openDocumentFile(base64Data, fileName);
+    } catch (err) {
+      setErrorMsg("Błąd podglądu wezwania: " + err.message);
+    }
+  };
+
+  const handleSendFormalNotice = async (inv) => {
+    try {
+      setErrorMsg("");
+      const tenant = selectedTenant;
+      const landlord = getUserById(landlordId);
+      const property = selectedProperty;
+      
+      if (!tenant || !landlord || !property) {
+        throw new Error("Brak kompletnych danych do wygenerowania wezwania.");
+      }
+
+      const htmlContent = generateFormalNoticeHtml(inv, tenant, landlord, property);
+      const base64Data = "data:text/html;base64," + btoa(unescape(encodeURIComponent(htmlContent)));
+      const invMonth = inv.month || (inv.title ? inv.title : (inv.issueDate ? inv.issueDate.substring(0, 7) : "Monit"));
+      const fileName = `Wezwanie_do_zaplaty_${tenant.name.replace(/\s+/g, "_")}_${invMonth.replace(/\s+/g, "_")}.html`;
+
+      // Save file physically on disk
+      const saveResponse = await fetch("/api/save-document", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          fileName,
+          fileData: base64Data
+        })
+      });
+
+      if (!saveResponse.ok) {
+        const errData = await saveResponse.json();
+        throw new Error(errData.error || "Serwer odmówił zapisu pliku.");
+      }
+
+      const { fileUrl } = await saveResponse.json();
+
+      // Transaction: approve monit, register document, send chat message with attachment, and update invoice status
+      approveAndSendFormalNotice(inv.id, fileUrl, fileName, htmlContent.length);
+
+      // Switch to the Rozliczenia thread so the user sees the sent message immediately
+      setActiveThread("Rozliczenia");
+      
+      // Reload pending monits for UI
+      loadPendingMonits();
+      
+      alert("Wezwanie do zapłaty zostało pomyślnie wygenerowane, zapisane na dysku i wysłane do lokatora w czacie!");
+    } catch (err) {
+      setErrorMsg("Błąd wysyłania wezwania: " + err.message);
+    }
+  };
 
   const handleImageChange = (e) => {
     const file = e.target.files[0];
@@ -267,6 +674,41 @@ export default function LandlordMessages({ landlordId }) {
                 </span>
               </div>
 
+              {/* Pending Monit Alerts */}
+              {pendingMonits.map(inv => (
+                <div key={inv.id} className="bg-amber-500/10 border-b border-amber-500/25 px-5 py-3.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 font-sans text-xs animate-fade-in shrink-0">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0 text-amber-400 mt-0.5">
+                      <XCircle className="w-4 h-4 text-amber-400 animate-pulse" />
+                    </div>
+                    <div>
+                      <p className="font-semibold text-white">
+                        Formalne wezwanie do zapłaty (T+10) – Oczekuje na wysyłkę
+                      </p>
+                      <p className="text-dark-400 text-[10px] mt-0.5 font-sans leading-relaxed">
+                        Zaległość za rachunek <span className="font-semibold text-amber-300">"{inv.title}"</span> ({inv.amount} PLN). Opóźnienie przekroczyło 10 dni.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 w-full md:w-auto shrink-0 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handlePreviewFormalNotice(inv)}
+                      className="px-2.5 py-1.5 bg-dark-850 hover:bg-dark-800 text-dark-300 hover:text-white rounded-lg border border-dark-700/50 transition-all font-semibold uppercase text-[10px] cursor-pointer"
+                    >
+                      📄 Podgląd wezwania
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSendFormalNotice(inv)}
+                      className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-all font-semibold uppercase text-[10px] flex items-center gap-1 shadow-md shadow-amber-600/10 hover:shadow-amber-500/20 cursor-pointer"
+                    >
+                      🟢 Akceptuj i wyślij
+                    </button>
+                  </div>
+                </div>
+              ))}
+
               {/* Bubbles */}
               <div className="flex-1 overflow-y-auto p-5 space-y-3.5">
                 {messages.length === 0 ? (
@@ -286,21 +728,64 @@ export default function LandlordMessages({ landlordId }) {
                           {m.text && <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>}
                           
                           {m.attachment_data && (
-                            <div 
-                              className={`mt-2 rounded-xl overflow-hidden border ${
-                                isMe ? 'border-brand-500/30' : 'border-dark-700'
-                              } bg-dark-950/40 cursor-pointer group relative max-w-xs`}
-                              onClick={() => setActiveLightbox(m)}
-                            >
-                              <img 
-                                src={m.attachment_data} 
-                                alt={m.attachment_name || "Załącznik"} 
-                                className="max-w-full max-h-48 object-cover rounded-xl transition-all duration-300 group-hover:scale-[1.02] group-hover:brightness-110" 
-                              />
-                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-xs text-white font-medium">
-                                <Sparkles className="w-4 h-4 text-brand-400 animate-pulse" /> Powiększ
-                              </div>
-                            </div>
+                            (() => {
+                              const isImage = m.attachment_data.startsWith("data:image/") || 
+                                              (m.attachment_name && m.attachment_name.toLowerCase().match(/\.(jpg|jpeg|png|webp|gif)$/));
+                              
+                              if (isImage) {
+                                return (
+                                  <div 
+                                    className={`mt-2 rounded-xl overflow-hidden border ${
+                                      isMe ? 'border-brand-500/30' : 'border-dark-700'
+                                    } bg-dark-950/40 cursor-pointer group relative max-w-xs`}
+                                    onClick={() => setActiveLightbox(m)}
+                                  >
+                                    <img 
+                                      src={m.attachment_data} 
+                                      alt={m.attachment_name || "Załącznik"} 
+                                      className="max-w-full max-h-48 object-cover rounded-xl transition-all duration-300 group-hover:scale-[1.02] group-hover:brightness-110" 
+                                    />
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-xs text-white font-medium">
+                                      <Sparkles className="w-4 h-4 text-brand-400 animate-pulse" /> Powiększ
+                                    </div>
+                                  </div>
+                                );
+                              } else {
+                                return (
+                                  <div className={`mt-2 rounded-xl border ${
+                                    isMe ? 'border-brand-500/30' : 'border-dark-700'
+                                  } bg-dark-950/40 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 max-w-sm`}>
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <div className="w-9 h-9 rounded-lg bg-dark-900 border border-dark-800 flex items-center justify-center shrink-0">
+                                        <FileText className="w-5 h-5 text-brand-400" />
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-xs font-semibold text-white truncate max-w-[180px]">{m.attachment_name || "Dokument"}</p>
+                                        <p className="text-[10px] text-dark-400">Dokument PDF/HTML</p>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => openDocumentFile(m.attachment_data, m.attachment_name)}
+                                        className="p-1.5 bg-dark-800 hover:bg-brand-600 text-dark-300 hover:text-white rounded-lg transition-all text-[10px] font-bold uppercase flex items-center gap-1 cursor-pointer"
+                                        title="Podgląd dokumentu"
+                                      >
+                                        <Eye className="w-3.5 h-3.5" /> Podgląd
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => downloadDocumentFile(m.attachment_data, m.attachment_name)}
+                                        className="p-1.5 bg-brand-600 hover:bg-brand-500 text-white rounded-lg transition-all text-[10px] font-bold uppercase flex items-center gap-1 cursor-pointer"
+                                        title="Pobierz dokument na dysk"
+                                      >
+                                        <Download className="w-3.5 h-3.5" /> Pobierz
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                            })()
                           )}
                           
                           <div className="flex items-center justify-end gap-1 mt-1 text-[9px] opacity-60">

@@ -4,7 +4,9 @@ import {
   sendMessage, 
   markMessagesAsRead,
   getPropertiesByTenant,
-  getUserById
+  getUserById,
+  openDocumentFile,
+  downloadDocumentFile
 } from "../../utils/storage";
 import { 
   MessageSquare, 
@@ -16,7 +18,9 @@ import {
   Paperclip, 
   X, 
   Download,
-  XCircle
+  XCircle,
+  FileText,
+  Eye
 } from "lucide-react";
 
 const THREADS = [
@@ -58,6 +62,20 @@ export default function TenantMessages({ tenantId }) {
       // Mark received messages in this thread as read
       markMessagesAsRead(landlord.id, tenantId, activeThread);
     }
+  }, [tenantId, landlord, activeThread]);
+
+  useEffect(() => {
+    const handleMessagesUpdate = () => {
+      if (landlord) {
+        const list = getMessagesBetweenUsers(tenantId, landlord.id)
+          .filter(m => m.subject === activeThread);
+        setMessages(list);
+      }
+    };
+    window.addEventListener("rentportal_messages_updated", handleMessagesUpdate);
+    return () => {
+      window.removeEventListener("rentportal_messages_updated", handleMessagesUpdate);
+    };
   }, [tenantId, landlord, activeThread]);
 
   useEffect(() => {
@@ -244,21 +262,64 @@ export default function TenantMessages({ tenantId }) {
                         {m.text && <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>}
                         
                         {m.attachment_data && (
-                          <div 
-                            className={`mt-2 rounded-xl overflow-hidden border ${
-                              isMe ? 'border-brand-500/30' : 'border-dark-700'
-                            } bg-dark-950/40 cursor-pointer group relative max-w-xs`}
-                            onClick={() => setActiveLightbox(m)}
-                          >
-                            <img 
-                              src={m.attachment_data} 
-                              alt={m.attachment_name || "Załącznik"} 
-                              className="max-w-full max-h-48 object-cover rounded-xl transition-all duration-300 group-hover:scale-[1.02] group-hover:brightness-110" 
-                            />
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-xs text-white font-medium">
-                              <Sparkles className="w-4 h-4 text-brand-400 animate-pulse" /> Powiększ
-                            </div>
-                          </div>
+                          (() => {
+                            const isImage = m.attachment_data.startsWith("data:image/") || 
+                                            (m.attachment_name && m.attachment_name.toLowerCase().match(/\.(jpg|jpeg|png|webp|gif)$/));
+                            
+                            if (isImage) {
+                              return (
+                                <div 
+                                  className={`mt-2 rounded-xl overflow-hidden border ${
+                                    isMe ? 'border-brand-500/30' : 'border-dark-700'
+                                  } bg-dark-950/40 cursor-pointer group relative max-w-xs`}
+                                  onClick={() => setActiveLightbox(m)}
+                                >
+                                  <img 
+                                    src={m.attachment_data} 
+                                    alt={m.attachment_name || "Załącznik"} 
+                                    className="max-w-full max-h-48 object-cover rounded-xl transition-all duration-300 group-hover:scale-[1.02] group-hover:brightness-110" 
+                                  />
+                                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-xs text-white font-medium">
+                                    <Sparkles className="w-4 h-4 text-brand-400 animate-pulse" /> Powiększ
+                                  </div>
+                                </div>
+                              );
+                            } else {
+                              return (
+                                <div className={`mt-2 rounded-xl border ${
+                                    isMe ? 'border-brand-500/30' : 'border-dark-700'
+                                  } bg-dark-950/40 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 max-w-sm`}>
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <div className="w-9 h-9 rounded-lg bg-dark-900 border border-dark-800 flex items-center justify-center shrink-0">
+                                        <FileText className="w-5 h-5 text-brand-400" />
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-xs font-semibold text-white truncate max-w-[180px]">{m.attachment_name || "Dokument"}</p>
+                                        <p className="text-[10px] text-dark-400">Dokument PDF/HTML</p>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => openDocumentFile(m.attachment_data, m.attachment_name)}
+                                        className="p-1.5 bg-dark-800 hover:bg-brand-600 text-dark-300 hover:text-white rounded-lg transition-all text-[10px] font-bold uppercase flex items-center gap-1 cursor-pointer"
+                                        title="Podgląd dokumentu"
+                                      >
+                                        <Eye className="w-3.5 h-3.5" /> Podgląd
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => downloadDocumentFile(m.attachment_data, m.attachment_name)}
+                                        className="p-1.5 bg-brand-600 hover:bg-brand-500 text-white rounded-lg transition-all text-[10px] font-bold uppercase flex items-center gap-1 cursor-pointer"
+                                        title="Pobierz dokument na dysk"
+                                      >
+                                        <Download className="w-3.5 h-3.5" /> Pobierz
+                                      </button>
+                                    </div>
+                                  </div>
+                              );
+                            }
+                          })()
                         )}
                         
                         <div className="flex items-center justify-end gap-1 mt-1 text-[9px] opacity-60">

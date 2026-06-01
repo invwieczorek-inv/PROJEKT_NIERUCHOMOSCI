@@ -6,6 +6,8 @@ export const MOCK_USERS = [
     name: "Krzysztof",
     phone: "+48 501 234 567",
     role: "landlord",
+    addressStreet: "Floriańska 12/3",
+    postalCodeCity: "31-021 Kraków",
     createdAt: "2026-01-01T10:00:00.000Z"
   },
   {

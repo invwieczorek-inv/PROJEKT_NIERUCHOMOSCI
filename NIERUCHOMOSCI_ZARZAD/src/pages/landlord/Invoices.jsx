@@ -19,9 +19,12 @@ import {
   getDocuments,
   addDocument,
   deleteDocument,
-  openDocumentFile
+  openDocumentFile,
+  deleteInvoice,
+  downloadDocumentFile,
+  sendMessage
 } from "../../utils/storage";
-import { CreditCard, Plus, Check, Calendar, PlusCircle, AlertTriangle, CheckCircle, FileText, Info, X, Sparkles, Trash2, Coins, TrendingUp, History, UserPlus, Database, Layers, Eye } from "lucide-react";
+import { CreditCard, Plus, Check, Calendar, PlusCircle, AlertTriangle, CheckCircle, FileText, Info, X, Sparkles, Trash2, Coins, TrendingUp, History, UserPlus, Database, Layers, Eye, Send, Download } from "lucide-react";
 
 
 export default function LandlordInvoices({ landlordId }) {
@@ -52,6 +55,11 @@ export default function LandlordInvoices({ landlordId }) {
   const [bookingDate, setBookingDate] = useState("");
   const [bookingNotes, setBookingNotes] = useState("");
 
+  // Payments registry PDF compilation report states
+  const [showInvoiceReportModal, setShowInvoiceReportModal] = useState(false);
+  const [reportSendingTenantId, setReportSendingTenantId] = useState("");
+  const [isGeneratingInvoiceReport, setIsGeneratingInvoiceReport] = useState(false);
+
   // Filter states
   const [filterPropertyId, setFilterPropertyId] = useState("all");
   const [filterTenantId, setFilterTenantId] = useState("all");
@@ -69,6 +77,80 @@ export default function LandlordInvoices({ landlordId }) {
 
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [customPropertyValue, setCustomPropertyValue] = useState(null);
+  const [customEquityValue, setCustomEquityValue] = useState(null);
+  const [showRoiSettings, setShowRoiSettings] = useState(false);
+  const [roiError, setRoiError] = useState("");
+
+  const getResolvedPropertyValue = () => {
+    let resolvedVal = 0;
+    if (filterPropertyId !== "all") {
+      const prop = allLandlordProperties.find(p => p.id === filterPropertyId);
+      if (prop) {
+        const isM1 = prop.id === "m1";
+        const isM2 = prop.id === "m2";
+        resolvedVal = isM1 ? 650000 : (isM2 ? 450000 : prop.rentAmount * 240);
+      }
+    } else {
+      allLandlordProperties.forEach(p => {
+        const isM1 = p.id === "m1";
+        const isM2 = p.id === "m2";
+        const val = isM1 ? 650000 : (isM2 ? 450000 : p.rentAmount * 240);
+        resolvedVal += val;
+      });
+      if (resolvedVal === 0) {
+        resolvedVal = 1100000;
+      }
+    }
+    return resolvedVal;
+  };
+
+  const handlePropertyValueChange = (val) => {
+    setRoiError("");
+    try {
+      if (val === "") {
+        setCustomPropertyValue(null);
+        return;
+      }
+      const num = Number(val);
+      if (isNaN(num)) {
+        throw new Error("Wartość lokalu musi być liczbą.");
+      }
+      if (num < 0) {
+        throw new Error("Wartość lokalu nie może być ujemna.");
+      }
+      if (customEquityValue !== null && num < customEquityValue) {
+        throw new Error("Wartość lokalu nie może być mniejsza od wkładu własnego.");
+      }
+      setCustomPropertyValue(num);
+    } catch (err) {
+      setRoiError(err.message);
+    }
+  };
+
+  const handleEquityValueChange = (val) => {
+    setRoiError("");
+    try {
+      if (val === "") {
+        setCustomEquityValue(null);
+        return;
+      }
+      const num = Number(val);
+      if (isNaN(num)) {
+        throw new Error("Wkład własny musi być liczbą.");
+      }
+      if (num < 0) {
+        throw new Error("Wkład własny nie może być ujemny.");
+      }
+      const currentPropVal = customPropertyValue !== null ? customPropertyValue : getResolvedPropertyValue();
+      if (num > currentPropVal) {
+        throw new Error("Wkład własny nie może przekraczać wartości lokalu.");
+      }
+      setCustomEquityValue(num);
+    } catch (err) {
+      setRoiError(err.message);
+    }
+  };
 
   const [cashFlowReports, setCashFlowReports] = useState([]);
   const [generatingReport, setGeneratingReport] = useState(false);
@@ -792,6 +874,19 @@ export default function LandlordInvoices({ landlordId }) {
     }
   };
 
+  const handleDeleteInvoice = (id) => {
+    if (window.confirm("Czy na pewno chcesz usunąć tę płatność/rachunek z systemu? Tej operacji nie można cofnąć.")) {
+      try {
+        setErrorMsg("");
+        setSuccessMsg("");
+        deleteInvoice(id);
+        setSuccessMsg("Płatność została pomyślnie usunięta.");
+      } catch (err) {
+        setErrorMsg("Błąd podczas usuwania płatności: " + err.message);
+      }
+    }
+  };
+
   // Collect all unique tenants in active contracts for the filter
   const filterTenants = [];
   const tenantMap = {};
@@ -933,6 +1028,172 @@ export default function LandlordInvoices({ landlordId }) {
   const profitabilityPercentage = rentRevenue > 0 
     ? Math.round((netRentalIncome / rentRevenue) * 100) 
     : 0;
+
+  // Real-term Operating Profitability (ROI/ROE)
+  // Real Net Income = (rentRevenue + stats.adminSum) - stats.adminSum - repairs (renovationExpenses) - insurance (insuranceExpenses) - 8.5% flat tax (flatTaxAmount)
+  const flatTaxAmount = rentRevenue * 0.085;
+  const totalRealRevenue = rentRevenue + stats.adminSum;
+  const realNetIncome = totalRealRevenue - stats.adminSum - expenseStats.renovationExpenses - expenseStats.insuranceExpenses - flatTaxAmount;
+  const realRoiPercentage = rentRevenue > 0 
+    ? Math.round((realNetIncome / rentRevenue) * 100) 
+    : 0;
+
+  // Calculate dynamic default property value and equity
+  let resolvedPropertyValue = 0;
+  let resolvedEquityValue = 0;
+
+  if (filterPropertyId !== "all") {
+    const prop = allLandlordProperties.find(p => p.id === filterPropertyId);
+    if (prop) {
+      const isM1 = prop.id === "m1";
+      const isM2 = prop.id === "m2";
+      resolvedPropertyValue = isM1 ? 650000 : (isM2 ? 450000 : prop.rentAmount * 240);
+      resolvedEquityValue = isM1 ? 200000 : (isM2 ? 150000 : resolvedPropertyValue * 0.3);
+    }
+  } else {
+    // Sum for all properties in properties list
+    allLandlordProperties.forEach(p => {
+      const isM1 = p.id === "m1";
+      const isM2 = p.id === "m2";
+      const val = isM1 ? 650000 : (isM2 ? 450000 : p.rentAmount * 240);
+      const eq = isM1 ? 200000 : (isM2 ? 150000 : val * 0.3);
+      resolvedPropertyValue += val;
+      resolvedEquityValue += eq;
+    });
+    if (resolvedPropertyValue === 0) {
+      resolvedPropertyValue = 1100000;
+      resolvedEquityValue = 350000;
+    }
+  }
+
+  const propertyValue = customPropertyValue !== null ? customPropertyValue : resolvedPropertyValue;
+  const equityValue = customEquityValue !== null ? customEquityValue : resolvedEquityValue;
+
+  const realRoePercentage = equityValue > 0
+    ? Math.round((realNetIncome / equityValue) * 100 * 100) / 100
+    : 0;
+
+  // vacancy rate calculation for 2026
+  const days2026 = [];
+  for (let m = 0; m < 12; m++) {
+    const daysInMonth = new Date(2026, m + 1, 0).getDate();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const monthStr = String(m + 1).padStart(2, '0');
+      const dayStr = String(d).padStart(2, '0');
+      days2026.push(`2026-${monthStr}-${dayStr}`);
+    }
+  }
+
+  const targetPropertiesForVacancy = filterPropertyId !== "all"
+    ? allLandlordProperties.filter(p => p.id === filterPropertyId)
+    : allLandlordProperties;
+
+  const propertyVacancyStats = targetPropertiesForVacancy.map(prop => {
+    const intervals = [];
+
+    // 1. Current active lease
+    if (prop.tenant_id && prop.leaseStart) {
+      const lStart = prop.leaseStart;
+      let lEnd = prop.leaseEnd || "2026-12-31";
+      if (prop.earlyTermination && prop.earlyTermination.terminationDate) {
+        lEnd = prop.earlyTermination.terminationDate;
+      }
+      intervals.push({ start: lStart, end: lEnd });
+    }
+
+    // 2. Historical lease ranges for this property
+    allTenants.forEach(tenant => {
+      if (tenant.leaseHistory) {
+        tenant.leaseHistory.forEach(lh => {
+          if (lh.propertyId === prop.id && lh.leaseStart && lh.leaseEnd) {
+            intervals.push({ start: lh.leaseStart, end: lh.leaseEnd });
+          }
+        });
+      }
+    });
+
+    let vacantDaysForProp = 0;
+    days2026.forEach(dayStr => {
+      const isRented = intervals.some(inv => {
+        return dayStr >= inv.start && dayStr <= inv.end;
+      });
+      if (!isRented) {
+        vacantDaysForProp++;
+      }
+    });
+
+    const vacantRateForProp = Math.round((vacantDaysForProp / 365) * 100);
+
+    return {
+      propertyId: prop.id,
+      propertyTitle: prop.title,
+      vacantDays: vacantDaysForProp,
+      vacantRate: vacantRateForProp,
+      rentedDays: 365 - vacantDaysForProp
+    };
+  });
+
+  const aggVacantDays = propertyVacancyStats.reduce((acc, s) => acc + s.vacantDays, 0);
+  const aggPossibleDays = targetPropertiesForVacancy.length * 365;
+  const vacancyRate = aggPossibleDays > 0 ? Math.round((aggVacantDays / aggPossibleDays) * 100) : 0;
+
+  // Aging Debts Calculation relative to 2026-06-01
+  const referenceDate = new Date("2026-06-01");
+  const agingInvoices = invoices.filter(inv => {
+    if (filterPropertyId !== "all" && inv.property_id !== filterPropertyId) {
+      return false;
+    }
+    if (filterTenantId !== "all" && inv.tenant_id !== filterTenantId) {
+      return false;
+    }
+    if (inv.status !== "unpaid" && inv.status !== "partial") {
+      return false;
+    }
+    const dueDate = new Date(inv.due_date);
+    return dueDate < referenceDate;
+  });
+
+  const agingDebtsBrackets = {
+    low: { name: "Niskie (1-3 dni)", days: "1-3 dni", color: "text-green-400 bg-green-500/10 border-green-500/20", items: [], total: 0 },
+    medium: { name: "Średnie (4-10 dni)", days: "4-10 dni", color: "text-yellow-400 bg-yellow-500/10 border-yellow-500/20", items: [], total: 0 },
+    high: { name: "Wysokie (11-30 dni)", days: "11-30 dni", color: "text-orange-400 bg-orange-500/10 border-orange-500/20", items: [], total: 0 },
+    critical: { name: "Krytyczne (30+ dni)", days: "30+ dni", color: "text-red-400 bg-red-500/10 border-red-500/20", items: [], total: 0 }
+  };
+
+  agingInvoices.forEach(inv => {
+    const dueDate = new Date(inv.due_date);
+    const diffTime = referenceDate.getTime() - dueDate.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 3600 * 24));
+    
+    if (diffDays > 0) {
+      const outstandingAmount = inv.amount - (inv.receivedPayment || 0);
+      const item = {
+        invoice: inv,
+        overdueDays: diffDays,
+        outstandingAmount
+      };
+
+      if (diffDays <= 3) {
+        agingDebtsBrackets.low.items.push(item);
+        agingDebtsBrackets.low.total += outstandingAmount;
+      } else if (diffDays <= 10) {
+        agingDebtsBrackets.medium.items.push(item);
+        agingDebtsBrackets.medium.total += outstandingAmount;
+      } else if (diffDays <= 30) {
+        agingDebtsBrackets.high.items.push(item);
+        agingDebtsBrackets.high.total += outstandingAmount;
+      } else {
+        agingDebtsBrackets.critical.items.push(item);
+        agingDebtsBrackets.critical.total += outstandingAmount;
+      }
+    }
+  });
+
+  const totalAgingDebt = 
+    agingDebtsBrackets.low.total + 
+    agingDebtsBrackets.medium.total + 
+    agingDebtsBrackets.high.total + 
+    agingDebtsBrackets.critical.total;
 
   const generateCashFlowReportHtml = (propertyName, tenantName) => {
     const reportDateStr = new Date().toLocaleString("pl-PL", {
@@ -1534,6 +1795,497 @@ export default function LandlordInvoices({ landlordId }) {
     }
   };
 
+  const generateInvoiceReportHtml = (propertyName, tenantName) => {
+    const reportDateStr = new Date().toLocaleString("pl-PL", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+
+    const dateRangeStr = (filterStartDate || filterEndDate)
+      ? `od ${filterStartDate || "początku"} do ${filterEndDate || "teraz"}`
+      : "Pełna historia";
+
+    // Summary calculations
+    let totalRent = 0;
+    let totalAdmin = 0;
+    let totalUtilities = 0;
+    let totalInvoiced = 0;
+    let totalPaid = 0;
+    
+    filteredInvoices.forEach(inv => {
+      totalRent += inv.amountRent || 0;
+      totalAdmin += inv.amountAdmin || 0;
+      totalUtilities += inv.amountUtilities || 0;
+      totalInvoiced += inv.amount || 0;
+      totalPaid += inv.receivedPayment || 0;
+    });
+    
+    const totalBalance = totalPaid - totalInvoiced;
+
+    // Generate table rows
+    const tableRows = filteredInvoices.map((inv) => {
+      const propTitle = allLandlordProperties.find(p => p.id === inv.property_id)?.title.split(",")[0] || "Mieszkanie";
+      const tenName = allTenants.find(t => t.id === inv.tenant_id)?.name || "Lokator";
+      const diff = (inv.receivedPayment || 0) - inv.amount;
+      
+      let statusLabel = "Niezapłacona";
+      let statusClass = "status-unpaid";
+      if (inv.status === "paid" || inv.receivedPayment >= inv.amount) {
+        statusLabel = "Opłacona";
+        statusClass = "status-paid";
+      } else if (inv.receivedPayment > 0) {
+        statusLabel = "Częściowa";
+        statusClass = "status-partial";
+      } else if (inv.status === "overdue") {
+        statusLabel = "Zaległa";
+        statusClass = "status-unpaid";
+      }
+
+      // Timeliness calculations
+      const timeliness = getPaymentTimeliness(inv.due_date, inv.paymentDate, inv.status);
+      let timelinessHtml = "";
+      if (timeliness) {
+        let color = "#64748b";
+        if (timeliness.colorClass.includes("red")) color = "#ef4444";
+        if (timeliness.colorClass.includes("green")) color = "#10b981";
+        timelinessHtml = `<div style="font-size: 8px; margin-top: 3px; color: ${color}; font-weight: 600;">${timeliness.message}</div>`;
+      }
+
+      return `
+        <tr class="table-row">
+          <td style="padding: 10px 6px; text-align: left; vertical-align: top;">
+            <div style="font-weight: bold; color: #0f172a; line-height: 1.2;">${inv.title}</div>
+            <div style="font-size: 9px; color: #94a3b8; font-family: monospace; margin-top: 2px;">ID: ${inv.id}</div>
+          </td>
+          <td style="padding: 10px 6px; text-align: left; vertical-align: top;">
+            <div style="font-weight: bold; color: #0f172a;">${propTitle}</div>
+            <div style="font-size: 9px; color: #64748b; margin-top: 2px;">L: <strong>${tenName}</strong></div>
+          </td>
+          <td style="padding: 10px 6px; text-align: right; font-family: monospace; vertical-align: top; color: #334155;">${(inv.amountRent || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 10px 6px; text-align: right; font-family: monospace; vertical-align: top; color: #334155;">${(inv.amountAdmin || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 10px 6px; text-align: right; font-family: monospace; vertical-align: top; color: #7c3aed; font-weight: bold;">${(inv.amountUtilities || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 10px 6px; text-align: right; font-family: monospace; vertical-align: top; font-weight: bold; color: #0f172a;">${inv.amount.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 10px 6px; text-align: right; font-family: monospace; vertical-align: top; color: #10b981; font-weight: bold;">${(inv.receivedPayment || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 10px 6px; text-align: right; font-family: monospace; vertical-align: top; font-weight: bold; color: ${diff < 0 ? '#ef4444' : diff > 0 ? '#10b981' : '#0f172a'}">${diff > 0 ? '+' : ''}${diff.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 10px 6px; text-align: center; vertical-align: top;">
+            <div style="font-weight: bold; color: #0f172a; font-family: monospace;">${inv.due_date}</div>
+            ${timelinessHtml}
+          </td>
+          <td style="padding: 10px 6px; text-align: center; vertical-align: top;"><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+        </tr>
+      `;
+    }).join("");
+
+    return `<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Zestawienie Płatności i Rachunków</title>
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #0f172a;
+      line-height: 1.5;
+      margin: 0;
+      padding: 0;
+      background-color: #f8fafc;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 35px auto;
+      background: #ffffff;
+      padding: 35px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+      border: 1px solid #e2e8f0;
+      position: relative;
+    }
+    .header-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 25px;
+    }
+    .title-cell {
+      vertical-align: top;
+    }
+    .title-cell h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 800;
+      color: #7c3aed;
+      text-transform: uppercase;
+      letter-spacing: -0.025em;
+    }
+    .title-cell p {
+      margin: 4px 0 0 0;
+      font-size: 12px;
+      color: #64748b;
+    }
+    .meta-cell {
+      text-align: right;
+      font-size: 11px;
+      color: #64748b;
+      line-height: 1.6;
+      vertical-align: top;
+    }
+    .meta-box {
+      background: #f8fafc;
+      border-radius: 8px;
+      padding: 12px 18px;
+      margin-bottom: 25px;
+      font-size: 12px;
+      border: 1px solid #e2e8f0;
+    }
+    .meta-box-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .meta-box-table td {
+      padding: 3px 0;
+    }
+    .meta-label {
+      font-weight: 600;
+      color: #475569;
+      width: 150px;
+    }
+    .meta-val {
+      color: #0f172a;
+    }
+    .report-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 30px;
+      font-size: 11px;
+    }
+    .report-table th {
+      background: #f1f5f9;
+      color: #475569;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 8px 6px;
+      border-bottom: 2px solid #cbd5e1;
+      text-align: left;
+      font-size: 9px;
+      letter-spacing: 0.05em;
+    }
+    .table-row {
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .table-row:nth-child(even) {
+      background: #f8fafc;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 2px 7px;
+      font-size: 9px;
+      font-weight: 700;
+      border-radius: 9999px;
+      text-transform: uppercase;
+    }
+    .status-paid {
+      background: #dcfce7;
+      color: #15803d;
+    }
+    .status-partial {
+      background: #fef9c3;
+      color: #a16207;
+    }
+    .status-unpaid {
+      background: #fee2e2;
+      color: #b91c1c;
+    }
+    .print-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #7c3aed;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 50px;
+      font-weight: bold;
+      font-size: 13px;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(124, 58, 237, 0.4);
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .print-btn:hover {
+      background: #6d28d9;
+      transform: translateY(-2px);
+    }
+    @media print {
+      body {
+        background: #ffffff;
+      }
+      .container {
+        border: none;
+        box-shadow: none;
+        padding: 0;
+        margin: 0;
+        max-width: 100%;
+      }
+      .print-btn {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <table class="header-table">
+      <tr>
+        <td class="title-cell">
+          <h1>Zestawienie Płatności i Rachunków</h1>
+          <p>Oficjalne podsumowanie rozliczeń finansowych</p>
+        </td>
+        <td class="meta-cell">
+          <strong>Sporządzono dnia:</strong><br>${reportDateStr}<br>
+          <strong>System:</strong> RentPortal Core v3
+        </td>
+      </tr>
+    </table>
+
+    <div class="meta-box">
+      <table class="meta-box-table">
+        <tr>
+          <td class="meta-label">Zakres filtru:</td>
+          <td class="meta-val">${propertyName}</td>
+        </tr>
+        <tr>
+          <td class="meta-label">Najemca / Strona:</td>
+          <td class="meta-val">${tenantName}</td>
+        </tr>
+        <tr>
+          <td class="meta-label">Przedział czasowy:</td>
+          <td class="meta-val">${dateRangeStr}</td>
+        </tr>
+        <tr>
+          <td class="meta-label">Liczba rachunków:</td>
+          <td class="meta-val">${filteredInvoices.length}</td>
+        </tr>
+      </table>
+    </div>
+
+    <table class="report-table">
+      <thead>
+        <tr>
+          <th style="width: 12%; text-align: left; padding-left: 6px;">Tytuł Rachunku</th>
+          <th style="width: 14%; text-align: left;">Mieszkanie / Najemca</th>
+          <th style="width: 10%; text-align: right;">Czynsz Najmu</th>
+          <th style="width: 10%; text-align: right;">Czynsz Admin.</th>
+          <th style="width: 10%; text-align: right;">Opłata za Media</th>
+          <th style="width: 11%; text-align: right;">Opłata (Suma)</th>
+          <th style="width: 11%; text-align: right;">Wpłata</th>
+          <th style="width: 11%; text-align: right;">Saldo</th>
+          <th style="width: 11%; text-align: center;">Termin</th>
+          <th style="width: 10%; text-align: center;">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${tableRows}
+      </tbody>
+      <tfoot>
+        <tr style="border-top: 2px solid #cbd5e1; border-bottom: 2px double #cbd5e1; background: #f8fafc; font-weight: bold;">
+          <td colspan="2" style="padding: 12px 6px; text-align: left; color: #475569; text-transform: uppercase; font-size: 10px; tracking-wider">PODSUMOWANIE RAZEM:</td>
+          <td style="padding: 12px 6px; text-align: right; font-family: monospace; color: #0f172a;">${totalRent.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 12px 6px; text-align: right; font-family: monospace; color: #0f172a;">${totalAdmin.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 12px 6px; text-align: right; font-family: monospace; color: #7c3aed;">${totalUtilities.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 12px 6px; text-align: right; font-family: monospace; color: #0f172a;">${totalInvoiced.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 12px 6px; text-align: right; font-family: monospace; color: #10b981;">${totalPaid.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td style="padding: 12px 6px; text-align: right; font-family: monospace; color: ${totalBalance < 0 ? '#ef4444' : totalBalance > 0 ? '#10b981' : '#0f172a'}">${totalBalance > 0 ? '+' : ''}${totalBalance.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</td>
+          <td colspan="2" style="background: #f8fafc;"></td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <div style="margin-top: 50px; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 15px; text-align: center;">
+      Dokument wygenerowany automatycznie w aplikacji RentPortal. Dane są zgodne ze stanem bazy danych na dzień sporządzenia zestawienia.
+    </div>
+  </div>
+
+  <button class="print-btn" onclick="window.print()">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align: middle;"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+    Drukuj / Zapisz PDF
+  </button>
+
+</body>
+</html>`;
+  };
+
+  const handleOpenInvoiceReportModal = () => {
+    if (filteredInvoices.length === 0) {
+      alert("Brak płatności do zestawienia w wybranym filtrze.");
+      return;
+    }
+    setErrorMsg("");
+    setSuccessMsg("");
+    
+    // Auto-prefill target tenant if a single tenant is selected in filters
+    if (filterTenantId !== "all") {
+      setReportSendingTenantId(filterTenantId);
+    } else {
+      // Find the first tenant in the filtered results if any
+      const uniqueTenants = [...new Set(filteredInvoices.map(inv => inv.tenant_id))];
+      if (uniqueTenants.length > 0) {
+        setReportSendingTenantId(uniqueTenants[0]);
+      } else {
+        setReportSendingTenantId("");
+      }
+    }
+    setShowInvoiceReportModal(true);
+  };
+
+  const handleGenerateAndDownloadInvoiceReport = async () => {
+    try {
+      setIsGeneratingInvoiceReport(true);
+      setErrorMsg("");
+
+      const propertyName = filterPropertyId !== "all" 
+        ? allLandlordProperties.find(p => p.id === filterPropertyId)?.title || "Mieszkanie"
+        : "Wszystkie Mieszkania";
+        
+      const tenantName = filterTenantId !== "all"
+        ? allTenants.find(t => t.id === filterTenantId)?.name || "Wszyscy Najemcy"
+        : "Wszyscy Najemcy";
+
+      const htmlContent = generateInvoiceReportHtml(propertyName, tenantName);
+      const base64Data = "data:text/html;base64," + btoa(unescape(encodeURIComponent(htmlContent)));
+      
+      const cleanPropName = propertyName.split(",")[0].replace(/\s+/g, "_");
+      const cleanTenantName = tenantName.replace(/\s+/g, "_");
+      const fileName = `Zestawienie_Platnosci_${cleanPropName}_${cleanTenantName}_${Date.now()}.html`;
+
+      // Save physically on disk
+      const saveResponse = await fetch("/api/save-document", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          fileName,
+          fileData: base64Data
+        })
+      });
+
+      if (!saveResponse.ok) {
+        const errData = await saveResponse.json();
+        throw new Error(errData.error || "Serwer odmówił zapisu pliku raportu.");
+      }
+
+      const { fileUrl } = await saveResponse.json();
+
+      // Register document
+      addDocument({
+        property_id: filterPropertyId !== "all" ? filterPropertyId : null,
+        tenant_id: filterTenantId !== "all" ? filterTenantId : null,
+        document_type: "invoice_report",
+        file_name: fileName,
+        file_size: (htmlContent.length / 1024).toFixed(1) + " KB",
+        file_data: fileUrl
+      });
+
+      // Trigger download
+      downloadDocumentFile(fileUrl, fileName);
+      setSuccessMsg("Raport został pobrany na dysk!");
+      setTimeout(() => setSuccessMsg(""), 3500);
+      setShowInvoiceReportModal(false);
+      handleReloadData();
+    } catch (err) {
+      alert("Błąd podczas generowania i pobierania raportu: " + err.message);
+    } finally {
+      setIsGeneratingInvoiceReport(false);
+    }
+  };
+
+  const handleGenerateAndSendInvoiceReport = async () => {
+    try {
+      setErrorMsg("");
+      const targetTenantId = filterTenantId !== "all" ? filterTenantId : reportSendingTenantId;
+      
+      if (!targetTenantId) {
+        alert("Proszę wybrać lokatora, do którego chcesz wysłać zestawienie.");
+        return;
+      }
+
+      setIsGeneratingInvoiceReport(true);
+
+      const targetTenant = allTenants.find(t => t.id === targetTenantId);
+      const tenantName = targetTenant ? targetTenant.name : "Najemca";
+
+      const propertyName = filterPropertyId !== "all" 
+        ? allLandlordProperties.find(p => p.id === filterPropertyId)?.title || "Mieszkanie"
+        : "Wszystkie Mieszkania";
+
+      const htmlContent = generateInvoiceReportHtml(propertyName, tenantName);
+      const base64Data = "data:text/html;base64," + btoa(unescape(encodeURIComponent(htmlContent)));
+      
+      const cleanPropName = propertyName.split(",")[0].replace(/\s+/g, "_");
+      const cleanTenantName = tenantName.replace(/\s+/g, "_");
+      const fileName = `Zestawienie_Platnosci_${cleanPropName}_${cleanTenantName}_${Date.now()}.html`;
+
+      // Save physically on disk
+      const saveResponse = await fetch("/api/save-document", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          fileName,
+          fileData: base64Data
+        })
+      });
+
+      if (!saveResponse.ok) {
+        const errData = await saveResponse.json();
+        throw new Error(errData.error || "Serwer odmówił zapisu pliku raportu.");
+      }
+
+      const { fileUrl } = await saveResponse.json();
+
+      // Register document
+      addDocument({
+        property_id: filterPropertyId !== "all" ? filterPropertyId : null,
+        tenant_id: targetTenantId,
+        document_type: "invoice_report",
+        file_name: fileName,
+        file_size: (htmlContent.length / 1024).toFixed(1) + " KB",
+        file_data: fileUrl
+      });
+
+      // Find the associated property of the target tenant to pass correct property_id
+      const targetProperty = allLandlordProperties.find(p => p.tenant_id === targetTenantId);
+
+      // Send chat message
+      sendMessage({
+        sender_id: landlordId,
+        receiver_id: targetTenantId,
+        property_id: targetProperty ? targetProperty.id : (filterPropertyId !== "all" ? filterPropertyId : null),
+        subject: "Rozliczenia",
+        text: `[ZESTAWIENIE PŁATNOŚCI] Dzień dobry, przesyłam aktualne zestawienie rachunków i płatności z dnia ${new Date().toLocaleDateString("pl-PL")}. Pełne szczegóły oraz bilans konta znajdują się w załączniku.`,
+        attachment_name: fileName,
+        attachment_data: fileUrl
+      });
+
+      window.dispatchEvent(new Event("rentportal_messages_updated"));
+      
+      alert(`Sukces! Zestawienie zostało pomyślnie wygenerowane i wysłane czatem do lokatora: ${tenantName}.`);
+      setShowInvoiceReportModal(false);
+      handleReloadData();
+    } catch (err) {
+      alert("Błąd podczas generowania i wysyłania raportu: " + err.message);
+    } finally {
+      setIsGeneratingInvoiceReport(false);
+    }
+  };
+
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1669,10 +2421,21 @@ export default function LandlordInvoices({ landlordId }) {
 
       {/* 2. Rejestr Płatności (Invoices List) */}
       <div className="glass p-6 rounded-2xl">
-        <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-          <FileText className="w-5 h-5 text-brand-400" />
-          Rejestr Płatności
-        </h3>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-3 border-b border-dark-800/80">
+          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+            <FileText className="w-5 h-5 text-brand-400" />
+            Rejestr Płatności
+          </h3>
+          
+          <button
+            type="button"
+            onClick={handleOpenInvoiceReportModal}
+            className="py-1.5 px-3 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+            title="Generuj zestawienie PDF z wyfiltrowanych płatności"
+          >
+            <FileText className="w-4 h-4" /> Generuj Raport (PDF)
+          </button>
+        </div>
 
         {filteredInvoices.length === 0 ? (
           <p className="text-dark-500 text-center py-6 text-sm">
@@ -1782,23 +2545,33 @@ export default function LandlordInvoices({ landlordId }) {
                         </span>
                       </td>
                       <td className="py-3.5 text-right font-sans">
-                        <button
-                          onClick={() => {
-                            setBookingInvoice(inv);
-                            setBookingAmount(inv.receivedPayment || inv.amount);
-                            setBookingDate(inv.paymentDate || new Date().toISOString().split('T')[0]);
-                            setBookingNotes(inv.notes || "");
-                            setShowBookingModal(true);
-                          }}
-                          className={`py-1 px-2.5 border rounded-xl text-xxs font-bold transition-all flex items-center gap-1 ml-auto cursor-pointer ${
-                            inv.receivedPayment > 0
-                              ? 'bg-brand-500/10 hover:bg-brand-500/25 border-brand-500/20 text-brand-300'
-                              : 'bg-green-500/10 hover:bg-green-500/25 border-green-500/20 text-green-400'
-                          }`}
-                        >
-                          <Check className="w-3 h-3" />
-                          {inv.receivedPayment > 0 ? "Edytuj wpłatę" : "Zaksięguj wpłatę"}
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => {
+                              setBookingInvoice(inv);
+                              setBookingAmount(inv.receivedPayment || inv.amount);
+                              setBookingDate(inv.paymentDate || new Date().toISOString().split('T')[0]);
+                              setBookingNotes(inv.notes || "");
+                              setShowBookingModal(true);
+                            }}
+                            className={`py-1 px-2.5 border rounded-xl text-xxs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                              inv.receivedPayment > 0
+                                ? 'bg-brand-500/10 hover:bg-brand-500/25 border-brand-500/20 text-brand-300'
+                                : 'bg-green-500/10 hover:bg-green-500/25 border-green-500/20 text-green-400'
+                            }`}
+                          >
+                            <Check className="w-3 h-3" />
+                            {inv.receivedPayment > 0 ? "Edytuj" : "Zaksięguj"}
+                          </button>
+                          
+                          <button
+                            onClick={() => handleDeleteInvoice(inv.id)}
+                            className="p-1 bg-red-500/10 hover:bg-red-500/25 border border-red-500/20 hover:border-red-500/40 text-red-400 rounded-lg transition-all cursor-pointer flex items-center justify-center"
+                            title="Usuń płatność"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -2168,79 +2941,403 @@ export default function LandlordInvoices({ landlordId }) {
         </div>
 
         {/* Profitability Summary Metrics */}
-        <div className="grid gap-6 md:grid-cols-3 font-sans">
-          {/* ROI Circular Gauge / Large badge */}
-          <div className="bg-dark-900/60 p-5 rounded-xl border border-dark-800 flex flex-col items-center justify-center text-center">
-            <span className="text-[10px] text-dark-400 uppercase tracking-wider font-semibold block mb-3">Stopa Rentowności Netto (ROI)</span>
-            <div className="relative flex items-center justify-center">
-              <div className={`w-28 h-28 rounded-full border-4 flex flex-col items-center justify-center shadow-xl ${
-                profitabilityPercentage >= 80 
-                  ? 'border-green-500/30 bg-green-500/5 text-green-400 shadow-green-950/20' 
-                  : profitabilityPercentage >= 50 
-                  ? 'border-yellow-500/30 bg-yellow-500/5 text-yellow-400 shadow-yellow-950/20' 
-                  : 'border-red-500/30 bg-red-500/5 text-red-400 shadow-red-950/20'
-              }`}>
-                <span className="text-3xl font-extrabold tracking-tight">{profitabilityPercentage}%</span>
-                <span className="text-[9px] uppercase tracking-wide font-semibold opacity-85 mt-0.5">ROI Rent</span>
+        <div className="grid gap-6 lg:grid-cols-3 font-sans">
+          
+          {/* ROI & ROE Circular Gauges & Inputs */}
+          <div className="bg-dark-900/60 p-5 rounded-xl border border-dark-800 flex flex-col justify-between space-y-4">
+            <div>
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[10px] text-dark-400 uppercase tracking-wider font-semibold">Rentowność ROI / ROE</span>
+                <button
+                  type="button"
+                  onClick={() => setShowRoiSettings(!showRoiSettings)}
+                  className="px-2 py-0.5 bg-dark-950 hover:bg-dark-850 border border-dark-800 rounded text-[9px] font-bold text-brand-400 hover:text-white transition-all cursor-pointer"
+                >
+                  ⚙️ {showRoiSettings ? "Ukryj parametry" : "Dostosuj kapitał"}
+                </button>
+              </div>
+
+              {showRoiSettings && (
+                <div className="bg-dark-950/50 p-2.5 rounded-lg border border-dark-850 mb-3 space-y-2 text-xxs animate-fade-in">
+                  <span className="font-bold text-dark-350 block mb-1">Parametry inwestycji dla ROE:</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[9px] text-dark-400 mb-0.5">Wartość lokalu (PLN):</label>
+                      <input
+                        type="number"
+                        placeholder={resolvedPropertyValue}
+                        value={customPropertyValue || ""}
+                        onChange={(e) => handlePropertyValueChange(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded px-1.5 py-1 text-white text-[10px] font-mono focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] text-dark-400 mb-0.5">Kapitał własny (PLN):</label>
+                      <input
+                        type="number"
+                        placeholder={resolvedEquityValue}
+                        value={customEquityValue || ""}
+                        onChange={(e) => handleEquityValueChange(e.target.value)}
+                        className="w-full bg-dark-900 border border-dark-800 rounded px-1.5 py-1 text-white text-[10px] font-mono focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  {roiError && (
+                    <p className="text-[9px] text-red-400 mt-1 font-bold animate-pulse">
+                      ⚠️ {roiError}
+                    </p>
+                  )}
+                  <p className="text-[8px] text-dark-500 italic mt-1 leading-normal">
+                    * Wprowadź własne kwoty, aby system precyzyjnie wyliczył ROE (Return on Equity). Domyślnie szacowane na podstawie stawek najmu i 30% wkładu.
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                {/* ROI Gauge */}
+                <div className="flex flex-col items-center justify-center text-center">
+                  <div className="relative flex items-center justify-center">
+                    <div className={`w-20 h-20 rounded-full border-4 flex flex-col items-center justify-center shadow-xl ${
+                      realRoiPercentage >= 80 
+                        ? 'border-green-500/30 bg-green-500/5 text-green-400 shadow-green-950/20' 
+                        : realRoiPercentage >= 40 
+                        ? 'border-yellow-500/30 bg-yellow-500/5 text-yellow-400 shadow-yellow-950/20' 
+                        : 'border-red-500/30 bg-red-500/5 text-red-400 shadow-red-950/20'
+                    }`}>
+                      <span className="text-lg font-extrabold tracking-tight">{realRoiPercentage}%</span>
+                      <span className="text-[7px] uppercase tracking-wide font-semibold opacity-85">Real ROI</span>
+                    </div>
+                  </div>
+                  <span className="text-[8px] text-dark-400 font-semibold uppercase tracking-wider mt-2">Rentowność ROI</span>
+                </div>
+
+                {/* ROE Gauge */}
+                <div className="flex flex-col items-center justify-center text-center">
+                  <div className="relative flex items-center justify-center">
+                    <div className={`w-20 h-20 rounded-full border-4 flex flex-col items-center justify-center shadow-xl ${
+                      realRoePercentage >= 10 
+                        ? 'border-green-500/30 bg-green-500/5 text-green-400 shadow-green-950/20' 
+                        : realRoePercentage >= 4 
+                        ? 'border-yellow-500/30 bg-yellow-500/5 text-yellow-400 shadow-yellow-950/20' 
+                        : 'border-red-500/30 bg-red-500/5 text-red-400 shadow-red-950/20'
+                    }`}>
+                      <span className="text-lg font-extrabold tracking-tight">{realRoePercentage}%</span>
+                      <span className="text-[7px] uppercase tracking-wide font-semibold opacity-85">Real ROE</span>
+                    </div>
+                  </div>
+                  <span className="text-[8px] text-dark-400 font-semibold uppercase tracking-wider mt-2">Zwrot z wkładu (ROE)</span>
+                </div>
               </div>
             </div>
-            <div className="mt-3">
-              <span className={`text-xxs font-semibold px-2 py-0.5 rounded-full ${
-                profitabilityPercentage >= 80 
+
+            <div className="border-t border-dark-850 pt-2.5 text-center">
+              <span className={`text-[10px] font-semibold px-2.5 py-0.5 rounded-full ${
+                realRoiPercentage >= 80 
                   ? 'bg-green-500/10 text-green-400' 
-                  : profitabilityPercentage >= 50 
+                  : realRoiPercentage >= 40 
                   ? 'bg-yellow-500/10 text-yellow-400' 
                   : 'bg-red-500/10 text-red-400 animate-pulse'
               }`}>
-                {profitabilityPercentage >= 80 
+                {realRoiPercentage >= 80 
                   ? 'Wysoka rentowność operacyjna' 
-                  : profitabilityPercentage >= 50 
+                  : realRoiPercentage >= 40 
                   ? 'Umiarkowana rentowność' 
                   : 'Niska rentowność / Koszty'}
               </span>
             </div>
           </div>
 
-          {/* Comparison breakdown */}
-          <div className="md:col-span-2 bg-dark-900/60 p-5 rounded-xl border border-dark-800 flex flex-col justify-between space-y-4">
-            <span className="text-[10px] text-dark-400 uppercase tracking-wider font-semibold block">Zestawienie Rentowności Inwestycji</span>
-            <div className="grid gap-4 sm:grid-cols-3 text-xs">
-              <div className="bg-dark-950/40 p-3 rounded-lg border border-dark-850">
-                <span className="text-dark-400 block mb-1">Przychód z najmu:</span>
-                <span className="text-base font-bold text-white font-mono">
-                  {rentRevenue.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}
-                </span>
-                <span className="text-[9px] text-dark-500 block mt-1">Suma czynszów najmu</span>
+          {/* Real NOI Breakdown */}
+          <div className="bg-dark-900/60 p-5 rounded-xl border border-dark-800 flex flex-col justify-between space-y-3">
+            <span className="text-[10px] text-dark-400 uppercase tracking-wider font-semibold block">Realny Zysk Operacyjny Netto</span>
+            <div className="space-y-1.5 text-[10px] font-mono">
+              <div className="flex justify-between items-center bg-dark-950/30 px-2 py-1 rounded">
+                <span className="text-dark-400 font-sans">Przychód z najmu (Czynsz):</span>
+                <span className="text-white font-bold">{rentRevenue.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</span>
               </div>
-
-              <div className="bg-dark-950/40 p-3 rounded-lg border border-dark-850">
-                <span className="text-dark-400 block mb-1">Koszty operacyjne:</span>
-                <span className="text-base font-bold text-red-400 font-mono">
-                  {expenseStats.totalExpenses.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}
-                </span>
-                <span className="text-[9px] text-dark-500 block mt-1">Remont + ubezpieczenie + dopos.</span>
+              <div className="flex justify-between items-center bg-dark-950/30 px-2 py-1 rounded">
+                <span className="text-dark-400 font-sans">Czynsz administracyjny (Wpłata lokatora):</span>
+                <span className="text-green-400 font-semibold">+{stats.adminSum.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</span>
               </div>
-
-<div className="bg-dark-950/40 p-3 rounded-lg border border-dark-850">
-                <span className="text-dark-400 block mb-1">Zysk operacyjny netto:</span>
-                <span className={`text-base font-bold font-mono ${netRentalIncome >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {netRentalIncome.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}
+              <div className="flex justify-between items-center bg-dark-950/30 px-2 py-1 rounded">
+                <span className="text-dark-400 font-sans">Koszty wspólnoty (Czynsz adm. - koszt):</span>
+                <span className="text-red-400 font-semibold">-{stats.adminSum.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</span>
+              </div>
+              <div className="flex justify-between items-center bg-dark-950/30 px-2 py-1 rounded">
+                <span className="text-dark-400 font-sans">Naprawy i konserwacja:</span>
+                <span className="text-red-400 font-semibold">-{expenseStats.renovationExpenses.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</span>
+              </div>
+              <div className="flex justify-between items-center bg-dark-950/30 px-2 py-1 rounded">
+                <span className="text-dark-400 font-sans">Koszty ubezpieczeń:</span>
+                <span className="text-red-400 font-semibold">-{expenseStats.insuranceExpenses.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</span>
+              </div>
+              <div className="flex justify-between items-center bg-dark-950/30 px-2 py-1 rounded border-b border-dark-800 pb-1">
+                <span className="text-dark-400 font-sans">Zryczałtowany podatek (8.5%):</span>
+                <span className="text-red-400 font-semibold">-{flatTaxAmount.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}</span>
+              </div>
+              <div className="flex justify-between items-center bg-brand-500/5 p-2 rounded border border-brand-500/20 text-xs">
+                <span className="text-brand-300 font-bold font-sans flex items-center gap-1">
+                  <Coins className="w-3.5 h-3.5" />
+                  Realny Zysk Netto:
                 </span>
-                <span className="text-[9px] text-dark-500 block mt-1">Bilans końcowy lokalu</span>
+                <span className={`font-bold font-mono ${realNetIncome >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {realNetIncome.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Vacancy Rate Widget */}
+          <div className="bg-dark-900/60 p-5 rounded-xl border border-dark-800 flex flex-col justify-between space-y-4">
+            <div className="flex justify-between items-start">
+              <div>
+                <span className="text-[10px] text-dark-400 uppercase tracking-wider font-semibold block mb-1">Wskaźnik Pustostanu (2026)</span>
+                <p className="text-[9px] text-dark-450 leading-normal font-sans">
+                  Stosunek dni bezumownych lokalu do całego roku kalendarzowego 2026.
+                </p>
+              </div>
+              <div className={`text-xxs font-bold px-2 py-0.5 rounded-full shrink-0 font-mono ${
+                vacancyRate === 0 
+                  ? "bg-green-500/10 text-green-400" 
+                  : vacancyRate < 20 
+                  ? "bg-yellow-500/10 text-yellow-400" 
+                  : "bg-red-500/10 text-red-400"
+              }`}>
+                {vacancyRate}% Pustostan
               </div>
             </div>
 
-            <div className="bg-dark-950/20 p-2.5 rounded-lg border border-dark-850/50 text-xxs text-dark-400 flex items-center gap-1.5">
-              <Info className="w-3.5 h-3.5 text-brand-400 shrink-0" />
-              <span>
-                <strong>Rentowność operacyjna (ROI)</strong> wyliczana jest jako stosunek zysku operacyjnego netto (czynsz najmu minus wydatki dodatkowe) do przychodów z czynszu najmu za wybrane filtry.
-              </span>
+            <div className="flex items-center gap-4">
+              {/* Radial Meter */}
+              <div className="relative flex items-center justify-center shrink-0">
+                <div className={`w-18 h-18 rounded-full border-4 flex flex-col items-center justify-center shadow-lg ${
+                  vacancyRate === 0 
+                    ? 'border-green-500/30 bg-green-500/5 text-green-400 shadow-green-950/10' 
+                    : vacancyRate < 20 
+                    ? 'border-yellow-500/30 bg-yellow-500/5 text-yellow-400 shadow-yellow-950/10' 
+                    : 'border-red-500/30 bg-red-500/5 text-red-400 shadow-red-950/10'
+                }`}>
+                  <span className="text-base font-extrabold tracking-tight">{vacancyRate}%</span>
+                  <span className="text-[6px] uppercase tracking-wide font-semibold opacity-85">Vacant</span>
+                </div>
+              </div>
+
+              {/* Vacancy Text info */}
+              <div className="space-y-1.5 flex-1 text-xxs font-sans">
+                <div className="flex justify-between border-b border-dark-850 pb-1">
+                  <span className="text-dark-400">Dni pustostanu:</span>
+                  <strong className="text-white font-mono">{aggVacantDays} / {aggPossibleDays} dni</strong>
+                </div>
+                <div className="flex justify-between border-b border-dark-850 pb-1">
+                  <span className="text-dark-400">Aktywny najem:</span>
+                  <strong className="text-green-400 font-mono">{aggPossibleDays - aggVacantDays} dni</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-dark-400">Średnie obłożenie:</span>
+                  <strong className="text-brand-300 font-mono">{100 - vacancyRate}%</strong>
+                </div>
+              </div>
+            </div>
+
+            {/* List details of properties */}
+            <div className="bg-dark-950/30 p-2 rounded-lg border border-dark-850 text-[9px] space-y-1 font-mono">
+              <span className="text-dark-500 uppercase tracking-wider block font-bold text-[8px] mb-1">Dni pustostanu w podziale na lokale:</span>
+              {propertyVacancyStats.map(stat => (
+                <div key={stat.propertyId} className="flex justify-between">
+                  <span className="text-dark-400 truncate max-w-[130px]" title={stat.propertyTitle}>{stat.propertyTitle.split(",")[0]}:</span>
+                  <span className={stat.vacantDays > 0 ? "text-yellow-400 font-bold" : "text-green-400"}>
+                    {stat.vacantDays} dni ({stat.vacantRate}%)
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
 
+        {/* Aging Debts Timeline & Risk Exposure Panel */}
+        <div className="bg-dark-900/60 p-5 rounded-xl border border-dark-800 space-y-4 font-sans">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-dark-800/80 pb-3">
+            <div>
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-orange-400" />
+                Ekspozycja na Ryzyko Płatności (Aging Debts)
+              </h4>
+              <p className="text-[10px] text-dark-450 mt-0.5">
+                Raport starzenia się zadłużeń dla niezapłaconych lub częściowo opłaconych rachunków.
+              </p>
+            </div>
+            <div className="text-right">
+              <span className="text-[9px] text-dark-450 block uppercase tracking-wider font-semibold">Całkowite zaległe zadłużenie:</span>
+              <span className={`text-sm font-extrabold font-mono ${totalAgingDebt > 0 ? "text-red-400 animate-pulse" : "text-green-400"}`}>
+                {totalAgingDebt.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}
+              </span>
+            </div>
+          </div>
+
+          {/* Segmented Timeline visual bar */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-[9px] text-dark-400 font-semibold uppercase tracking-wider">
+              <span>Podział długu na klasy ryzyka</span>
+              <span className="font-mono">Suma: {totalAgingDebt.toFixed(2)} PLN</span>
+            </div>
+            <div className="h-3.5 w-full bg-dark-950 rounded-full overflow-hidden flex border border-dark-850">
+              {totalAgingDebt === 0 ? (
+                <div className="h-full w-full bg-green-500/20 text-green-400 flex items-center justify-center text-[8px] font-bold uppercase tracking-widest font-sans">
+                  ✨ Wszystkie należności uregulowane w terminie
+                </div>
+              ) : (
+                <>
+                  {agingDebtsBrackets.low.total > 0 && (
+                    <div 
+                      style={{ width: `${(agingDebtsBrackets.low.total / totalAgingDebt) * 100}%` }}
+                      className="h-full bg-green-500/80 hover:brightness-110 transition-all cursor-help border-r border-dark-950/20"
+                      title={`Niskie ryzyko: ${agingDebtsBrackets.low.total.toFixed(2)} PLN`}
+                    />
+                  )}
+                  {agingDebtsBrackets.medium.total > 0 && (
+                    <div 
+                      style={{ width: `${(agingDebtsBrackets.medium.total / totalAgingDebt) * 100}%` }}
+                      className="h-full bg-yellow-500/80 hover:brightness-110 transition-all cursor-help border-r border-dark-950/20"
+                      title={`Średnie ryzyko: ${agingDebtsBrackets.medium.total.toFixed(2)} PLN`}
+                    />
+                  )}
+                  {agingDebtsBrackets.high.total > 0 && (
+                    <div 
+                      style={{ width: `${(agingDebtsBrackets.high.total / totalAgingDebt) * 100}%` }}
+                      className="h-full bg-orange-500/80 hover:brightness-110 transition-all cursor-help border-r border-dark-950/20"
+                      title={`Wysokie ryzyko: ${agingDebtsBrackets.high.total.toFixed(2)} PLN`}
+                    />
+                  )}
+                  {agingDebtsBrackets.critical.total > 0 && (
+                    <div 
+                      style={{ width: `${(agingDebtsBrackets.critical.total / totalAgingDebt) * 100}%` }}
+                      className="h-full bg-red-500/80 hover:brightness-110 transition-all cursor-help"
+                      title={`Krytyczne: ${agingDebtsBrackets.critical.total.toFixed(2)} PLN`}
+                    />
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Bracket cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1 text-center">
+              {Object.keys(agingDebtsBrackets).map(key => {
+                const br = agingDebtsBrackets[key];
+                const activeGlow = br.total > 0;
+                let ringColor = "border-dark-800 bg-dark-950/20";
+                if (activeGlow) {
+                  if (key === "low") ringColor = "border-green-500/30 bg-green-500/5 shadow-lg shadow-green-950/10";
+                  if (key === "medium") ringColor = "border-yellow-500/30 bg-yellow-500/5 shadow-lg shadow-yellow-950/10";
+                  if (key === "high") ringColor = "border-orange-500/30 bg-orange-500/5 shadow-lg shadow-orange-950/10";
+                  if (key === "critical") ringColor = "border-red-500/30 bg-red-500/5 shadow-lg shadow-red-950/10";
+                }
+
+                return (
+                  <div key={key} className={`p-3 rounded-lg border transition-all ${ringColor}`}>
+                    <span className="text-[8px] text-dark-400 uppercase tracking-wider font-bold block mb-1">{br.name}</span>
+                    <span className={`text-xs font-bold font-mono block ${activeGlow ? (key === 'low' ? 'text-green-400' : key === 'medium' ? 'text-yellow-400' : key === 'high' ? 'text-orange-400' : 'text-red-400') : 'text-dark-500'}`}>
+                      {br.total.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' })}
+                    </span>
+                    <span className="text-[8px] text-dark-500 block mt-0.5 font-sans font-medium">
+                      {br.items.length} {br.items.length === 1 ? "rachunek" : br.items.length > 1 && br.items.length < 5 ? "rachunki" : "rachunków"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* List of overdue invoices grouped by brackets or in a neat timeline table */}
+          <div className="space-y-2 pt-2">
+            <span className="text-[9px] text-dark-400 font-semibold uppercase tracking-wider block">Wykaz zadłużeń na osi czasu</span>
+            
+            {agingInvoices.length === 0 ? (
+              <div className="bg-dark-950/30 p-4 rounded-xl border border-dark-850/60 text-center flex flex-col items-center justify-center">
+                <CheckCircle className="w-6 h-6 text-green-400 mb-1.5" />
+                <p className="text-[10px] text-green-400 font-bold uppercase tracking-wider">Brak aktywnych zaległości!</p>
+                <p className="text-[9px] text-dark-450 mt-0.5">Wszyscy najemcy opłacają faktury zgodnie z terminami płatności.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-dark-800">
+                <table className="w-full text-left border-collapse text-[10px] font-sans text-dark-300">
+                  <thead>
+                    <tr className="bg-dark-900/40 border-b border-dark-800 text-[9px] font-bold text-dark-400 uppercase tracking-wider">
+                      <th className="p-2.5">Najemca / Lokal</th>
+                      <th className="p-2.5">Tytuł opłaty</th>
+                      <th className="p-2.5">Termin</th>
+                      <th className="p-2.5 text-center">Spóźnienie</th>
+                      <th className="p-2.5 text-right">Kwota należności</th>
+                      <th className="p-2.5 text-right">Zaległość</th>
+                      <th className="p-2.5 text-center">Klasa ryzyka</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-dark-850/60 bg-dark-900/10 font-medium">
+                    {(() => {
+                      // Flatten and sort by overdue days descending
+                      const sortedItems = [];
+                      Object.keys(agingDebtsBrackets).forEach(key => {
+                        agingDebtsBrackets[key].items.forEach(item => {
+                          sortedItems.push({
+                            ...item,
+                            bracketKey: key
+                          });
+                        });
+                      });
+                      sortedItems.sort((a, b) => b.overdueDays - a.overdueDays);
+
+                      return sortedItems.map((item, idx) => {
+                        const inv = item.invoice;
+                        const tName = allTenants.find(t => t.id === inv.tenant_id)?.name || "Lokator";
+                        const pName = allLandlordProperties.find(p => p.id === inv.property_id)?.title.split(",")[0] || "Mieszkanie";
+                        
+                        let badgeColor = "bg-green-500/10 text-green-400 border border-green-500/20";
+                        let riskLabel = "Niskie";
+                        if (item.bracketKey === "medium") {
+                          badgeColor = "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 animate-pulse";
+                          riskLabel = "Średnie";
+                        } else if (item.bracketKey === "high") {
+                          badgeColor = "bg-orange-500/10 text-orange-400 border border-orange-500/20 animate-pulse";
+                          riskLabel = "Wysokie";
+                        } else if (item.bracketKey === "critical") {
+                          badgeColor = "bg-red-500/10 text-red-400 border border-red-500/20 animate-pulse";
+                          riskLabel = "Krytyczne";
+                        }
+
+                        return (
+                          <tr key={inv.id} className="hover:bg-dark-900/30 transition-colors">
+                            <td className="p-2.5">
+                              <span className="font-bold text-white block">{tName}</span>
+                              <span className="text-[9px] text-dark-450 block">{pName}</span>
+                            </td>
+                            <td className="p-2.5 text-white">{inv.title}</td>
+                            <td className="p-2.5 font-mono text-[9px]">{inv.due_date}</td>
+                            <td className="p-2.5 text-center font-bold text-red-400 font-mono text-[10px]">
+                              {item.overdueDays} {item.overdueDays === 1 ? "dzień" : "dni"}
+                            </td>
+                            <td className="p-2.5 text-right font-mono font-semibold">
+                              {inv.amount.toFixed(2)} PLN
+                            </td>
+                            <td className="p-2.5 text-right font-mono font-extrabold text-red-400 text-[11px]">
+                              {item.outstandingAmount.toFixed(2)} PLN
+                            </td>
+                            <td className="p-2.5 text-center">
+                              <span className={`text-[8px] font-bold px-2 py-0.5 rounded ${badgeColor}`}>
+                                {riskLabel}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
         {showAddExpense && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-950/80 backdrop-blur-md overflow-y-auto animate-fade-in">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-950/80 backdrop-blur-md overflow-y-auto animate-fade-in font-sans">
             <div className="glass max-w-xl w-full p-6 rounded-2xl border-brand-500/20 space-y-4 shadow-2xl relative">
               <button 
                 type="button"
@@ -2325,17 +3422,17 @@ export default function LandlordInvoices({ landlordId }) {
                   />
                 </div>
 
-                <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+                 <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-3 border-t border-dark-800">
                   <button
                     type="button"
                     onClick={() => setShowAddExpense(false)}
-                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
                   >
                     Anuluj
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
                   >
                     Zapisz Koszt
                   </button>
@@ -2513,16 +3610,16 @@ export default function LandlordInvoices({ landlordId }) {
                   />
                 </div>
 
-                <div className="md:col-span-2 flex justify-end gap-3 pt-4 border-t border-dark-800">
+                <div className="md:col-span-2 flex flex-col-reverse sm:flex-row justify-end gap-3 pt-4 border-t border-dark-800">
                   <button 
                     type="button" onClick={() => setShowAddForm(false)}
-                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
                   >
                     Anuluj
                   </button>
                   <button 
                     type="submit" 
-                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
                   >
                     Generuj Rachunek
                   </button>
@@ -2667,25 +3764,171 @@ export default function LandlordInvoices({ landlordId }) {
                 />
               </div>
 
-              <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+               <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-3 border-t border-dark-800">
                 <button
                   type="button"
                   onClick={() => {
                     setShowBookingModal(false);
                     setBookingInvoice(null);
                   }}
-                  className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                  className="w-full sm:w-auto px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
                 >
                   Anuluj
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                  className="w-full sm:w-auto px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
                 >
                   Zatwierdź wpłatę
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Invoice Report Wizard Modal */}
+      {showInvoiceReportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-950/80 backdrop-blur-md overflow-y-auto animate-fade-in font-sans">
+          <div className="glass max-w-xl w-full p-6 rounded-2xl border-brand-500/20 space-y-4 shadow-2xl relative">
+            <button 
+              type="button"
+              onClick={() => {
+                setShowInvoiceReportModal(false);
+                setReportSendingTenantId("");
+              }}
+              className="absolute top-4 right-4 p-1.5 bg-dark-900 hover:bg-dark-800 text-dark-400 hover:text-white rounded-lg transition-colors cursor-pointer animate-none"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            
+            <h3 className="text-base font-bold text-white uppercase tracking-wider flex items-center gap-2 border-b border-dark-800 pb-3 text-brand-400">
+              <FileText className="w-5 h-5 text-brand-400" />
+              Kreator Raportu Rejestru Płatności
+            </h3>
+
+            {/* Current filters details */}
+            <div className="bg-dark-900/40 p-3.5 rounded-xl border border-dark-800 space-y-2.5 text-xs text-left">
+              <div className="flex justify-between border-b border-dark-850 pb-1.5 mb-1.5">
+                <span className="font-semibold text-brand-300">Podsumowanie wyfiltrowanych danych:</span>
+                <span className="text-dark-400">Liczba pozycji: <strong className="text-white">{filteredInvoices.length}</strong></span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-dark-400">Wybrane mieszkanie:</span>
+                <span className="font-semibold text-white">
+                  {filterPropertyId !== "all" 
+                    ? allLandlordProperties.find(p => p.id === filterPropertyId)?.title.split(",")[0] || "Mieszkanie"
+                    : "Wszystkie Lokale"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-dark-400">Wybrany najemca:</span>
+                <span className="font-semibold text-white">
+                  {filterTenantId !== "all" 
+                    ? allTenants.find(t => t.id === filterTenantId)?.name || "Lokator"
+                    : "Wszyscy Najemcy"}
+                </span>
+              </div>
+              
+              {/* Aggregated values */}
+              {(() => {
+                let totalInvoiced = 0;
+                let totalPaid = 0;
+                filteredInvoices.forEach(inv => {
+                  totalInvoiced += inv.amount || 0;
+                  totalPaid += inv.receivedPayment || 0;
+                });
+                const totalBalance = totalPaid - totalInvoiced;
+                
+                return (
+                  <>
+                    <div className="flex justify-between pt-1 border-t border-dark-850">
+                      <span className="text-dark-400">Suma należności:</span>
+                      <span className="font-bold font-mono text-white">{totalInvoiced.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-dark-400">Suma wpłat:</span>
+                      <span className="font-bold font-mono text-green-400">{totalPaid.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN</span>
+                    </div>
+                    <div className="flex justify-between pt-1 border-t border-dark-850 font-bold">
+                      <span className="text-brand-300">Bilans / Saldo końcowe:</span>
+                      <span className={`font-mono ${totalBalance < 0 ? 'text-red-400' : totalBalance > 0 ? 'text-green-400' : 'text-white'}`}>
+                        {totalBalance > 0 ? '+' : ''}{totalBalance.toLocaleString('pl-PL', { minimumFractionDigits: 2 })} PLN
+                      </span>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Chat Send tenant selector */}
+            {filterTenantId === "all" ? (
+              <div className="space-y-1.5 text-left">
+                <label className="block text-[10px] font-bold text-dark-500 uppercase tracking-wider font-sans">
+                  Wybierz lokatora do wysłania czatem
+                </label>
+                <select
+                  value={reportSendingTenantId}
+                  onChange={(e) => setReportSendingTenantId(e.target.value)}
+                  className="w-full bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-brand-500 transition-colors"
+                >
+                  <option value="">-- Wybierz lokatora z listy --</option>
+                  {(() => {
+                    // Find all unique tenants present in the filtered invoices list
+                    const tenantIdsInFiltered = [...new Set(filteredInvoices.map(inv => inv.tenant_id))];
+                    return tenantIdsInFiltered.map(tId => {
+                      const t = allTenants.find(ten => ten.id === tId);
+                      if (!t) return null;
+                      return <option key={t.id} value={t.id}>{t.name} (ID: {t.id})</option>;
+                    });
+                  })()}
+                </select>
+                <p className="text-[10px] text-dark-500 italic mt-0.5">
+                  Wysyłanie czatem wymaga wybrania lokatora, ponieważ filtrowanie obejmuje obecnie wielu najemców.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-brand-500/10 p-3 rounded-xl border border-brand-500/20 text-xs text-left text-brand-300 flex items-start gap-2">
+                <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  Opcja wysyłki czatem jest wstępnie skonfigurowana dla lokatora: <strong>{allTenants.find(t => t.id === filterTenantId)?.name}</strong>.
+                </span>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-3 border-t border-dark-800 w-full">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowInvoiceReportModal(false);
+                  setReportSendingTenantId("");
+                }}
+                className="w-full sm:w-auto px-4 py-2.5 bg-dark-900 hover:bg-dark-800 text-dark-300 hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer text-center"
+              >
+                Anuluj
+              </button>
+              
+              <button
+                type="button"
+                disabled={isGeneratingInvoiceReport || (filterTenantId === "all" && !reportSendingTenantId)}
+                onClick={handleGenerateAndSendInvoiceReport}
+                className="w-full sm:w-auto px-4 py-2.5 bg-dark-805 hover:bg-brand-600 text-brand-400 hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 border border-brand-500/20 hover:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Wysyła plik raportu w czacie do wybranego lokatora"
+              >
+                <Send className="w-3.5 h-3.5" /> Generuj i Wyślij Czatem
+              </button>
+
+              <button
+                type="button"
+                disabled={isGeneratingInvoiceReport}
+                onClick={handleGenerateAndDownloadInvoiceReport}
+                className="w-full sm:w-auto px-4 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 disabled:opacity-50 shadow-md"
+                title="Pobiera plik raportu bezpośrednio na Twój dysk"
+              >
+                <Download className="w-3.5 h-3.5" /> Generuj i Pobierz
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2711,7 +3954,7 @@ export default function LandlordInvoices({ landlordId }) {
             </div>
 
             {/* Tab Selectors */}
-            <div className="flex border-b border-dark-850 gap-2 text-xs">
+            <div className="flex overflow-x-auto whitespace-nowrap border-b border-dark-850 gap-1 sm:gap-2 text-xs pb-0.5 scrollbar-none">
               <button
                 type="button"
                 onClick={() => setWizardTab("tenants")}
@@ -2906,16 +4149,16 @@ export default function LandlordInvoices({ landlordId }) {
                   </div>
                 </div>
 
-                <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+                <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-3 border-t border-dark-800">
                   <button
                     type="button" onClick={() => setShowHistoryWizard(false)}
-                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
                   >
                     Anuluj
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
                   >
                     Zapisz Umowę i Lokatora
                   </button>
@@ -3070,16 +4313,16 @@ export default function LandlordInvoices({ landlordId }) {
                   />
                 </div>
 
-                <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+                <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-3 border-t border-dark-800">
                   <button
                     type="button" onClick={() => setShowHistoryWizard(false)}
-                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
                   >
                     Anuluj
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
                   >
                     Zapisz Fakturę Historyczną
                   </button>
@@ -3155,16 +4398,16 @@ export default function LandlordInvoices({ landlordId }) {
                   </span>
                 </div>
 
-                <div className="flex justify-end gap-3 pt-3 border-t border-dark-800">
+                <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-3 border-t border-dark-800">
                   <button
                     type="button" onClick={() => setShowHistoryWizard(false)}
-                    className="px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-dark-900 border border-dark-800 rounded-xl text-xs font-bold text-white hover:bg-dark-800 cursor-pointer"
                   >
                     Anuluj
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
+                    className="w-full sm:w-auto px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold glass-glow-brand cursor-pointer"
                   >
                     Zapisz Odczyt Historyczny
                   </button>

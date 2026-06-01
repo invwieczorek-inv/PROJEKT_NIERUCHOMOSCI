@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from "react";
+/* eslint-disable react-hooks/set-state-in-effect */
+import { useState, useEffect } from "react";
 import { 
   getPropertiesByLandlord, 
   getInvoices, 
   getMeters,
   getUserById,
-  updateUserProfile
+  updateUserProfile,
+  exportDatabaseBackup,
+  importDatabaseBackup
 } from "../../utils/storage";
 import LandlordProperties from "./Properties";
 import LandlordTenants from "./Tenants";
@@ -16,7 +19,6 @@ import {
   Building, 
   CreditCard, 
   Gauge, 
-  MessageSquare, 
   Activity, 
   UserCheck, 
   User,
@@ -27,7 +29,9 @@ import {
   XCircle,
   X,
   Calendar,
-  History
+  Database,
+  Download,
+  Upload
 } from "lucide-react";
 
 export default function LandlordDashboard({ activeUser }) {
@@ -84,6 +88,27 @@ export default function LandlordDashboard({ activeUser }) {
       setErrorToast("Błąd aktualizacji profilu: " + err.message);
       setTimeout(() => setErrorToast(""), 3500);
     }
+  };
+
+  const handleImportBackup = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const jsonContent = event.target.result;
+        importDatabaseBackup(jsonContent);
+        setSuccessToast("Kopia zapasowa została pomyślnie zaimportowana!");
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      } catch (err) {
+        setErrorToast(err.message);
+        setTimeout(() => setErrorToast(""), 3500);
+      }
+    };
+    reader.readAsText(file);
   };
 
   useEffect(() => {
@@ -346,7 +371,6 @@ export default function LandlordDashboard({ activeUser }) {
                       const hasLease = lStart && lEnd && p.tenant_id && lEnd >= today;
 
                       let startPct = 0;
-                      let endPct = 0;
                       let widthPct = 0;
 
                       if (hasLease) {
@@ -354,7 +378,7 @@ export default function LandlordDashboard({ activeUser }) {
                         const endMs = lEnd.getTime();
                         
                         startPct = ((startMs - todayMs) / yearMs) * 100;
-                        endPct = ((endMs - todayMs) / yearMs) * 100;
+                        let endPct = ((endMs - todayMs) / yearMs) * 100;
 
                         startPct = Math.max(0, Math.min(100, startPct));
                         endPct = Math.max(0, Math.min(100, endPct));
@@ -601,6 +625,44 @@ export default function LandlordDashboard({ activeUser }) {
               </button>
             </div>
           </form>
+        </div>
+
+        {/* Kopia Zapasowa Danych (Backup & Restore) */}
+        <div className="glass p-6 rounded-2xl border-brand-500/10 relative overflow-hidden space-y-4">
+          <div className="absolute right-4 top-4 text-brand-500/10 pointer-events-none">
+            <Database className="w-24 h-24 stroke-[1.5]" />
+          </div>
+          
+          <h3 className="text-base font-bold text-white font-sans flex items-center gap-2 border-b border-dark-800 pb-3">
+            <Database className="w-5 h-5 text-brand-400" />
+            Kopia Zapasowa Danych (Kopia Bezpieczeństwa)
+          </h3>
+          
+          <p className="text-xxs text-dark-400 max-w-2xl leading-relaxed">
+            Eksportuj lub importuj kopię zapasową całego systemu RentPortal (w tym nieruchomości, najemców, rachunki, odczyty liczników, notatki CRM, protokoły odbiorcze oraz stawki taryfowe) do pliku tekstowego JSON. Pozwala to na pełną migrację na inne urządzenie lub szybki powrót do stabilnej konfiguracji.
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={exportDatabaseBackup}
+              className="py-2.5 px-4 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-md flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" />
+              Eksportuj Kopię Zapasową (JSON)
+            </button>
+
+            <label className="py-2.5 px-4 bg-dark-900 hover:bg-dark-800 border border-dark-800 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-md flex items-center gap-2">
+              <Upload className="w-4 h-4 text-brand-400" />
+              Importuj Kopię Zapasową (JSON)
+              <input
+                type="file"
+                accept=".json"
+                onChange={handleImportBackup}
+                className="hidden"
+              />
+            </label>
+          </div>
         </div>
 
         {/* Success Toast */}

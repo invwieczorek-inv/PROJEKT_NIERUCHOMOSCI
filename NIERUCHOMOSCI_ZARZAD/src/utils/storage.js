@@ -1577,5 +1577,61 @@ export const approveAndSendFormalNotice = (invoiceId, fileUrl, fileName, htmlLen
   window.dispatchEvent(new Event("rentportal_messages_updated"));
 };
 
+// ==========================================
+// BACKUP SYSTEM (EXPORT / IMPORT JSON)
+// ==========================================
+export const exportDatabaseBackup = () => {
+  const backup = {};
+  Object.values(KEYS).forEach(k => {
+    const val = localStorage.getItem(k);
+    if (val) backup[k] = val;
+  });
+  
+  const rates = localStorage.getItem("rentportal_meter_rates");
+  if (rates) backup["rentportal_meter_rates"] = rates;
+  
+  const fees = localStorage.getItem("rentportal_pending_admin_fees");
+  if (fees) backup["rentportal_pending_admin_fees"] = fees;
+
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backup, null, 2));
+  const dlAnchorElem = document.createElement('a');
+  dlAnchorElem.setAttribute("href", dataStr);
+  const today = new Date().toISOString().split('T')[0];
+  dlAnchorElem.setAttribute("download", `rentportal_backup_${today}.json`);
+  dlAnchorElem.click();
+};
+
+export const importDatabaseBackup = (jsonString) => {
+  try {
+    const backup = JSON.parse(jsonString);
+    if (!backup || typeof backup !== 'object') {
+      throw new Error("Nieprawidłowy format pliku kopii zapasowej.");
+    }
+
+    const hasKeys = Object.keys(backup).some(k => 
+      Object.values(KEYS).includes(k) || 
+      k === "rentportal_meter_rates" || 
+      k === "rentportal_pending_admin_fees"
+    );
+
+    if (!hasKeys) {
+      throw new Error("Plik nie zawiera danych RentPortal.");
+    }
+
+    Object.keys(backup).forEach(k => {
+      localStorage.setItem(k, backup[k]);
+    });
+
+    window.dispatchEvent(new Event("rentportal_users_updated"));
+    window.dispatchEvent(new Event("rentportal_invoices_updated"));
+    window.dispatchEvent(new Event("rentportal_meters_updated"));
+    window.dispatchEvent(new Event("rentportal_admin_fees_updated"));
+    
+    return true;
+  } catch (err) {
+    throw new Error("Błąd podczas importu kopii zapasowej: " + err.message, { cause: err });
+  }
+};
+
 
 

@@ -1148,6 +1148,8 @@ const generateDifferenceReportHtml = (propertyName, tenantName, diffs, compariso
 </html>`;
 };
 
+import { calculateEarlyTerminationPenalty as calcPenaltyService } from "../../services/landlordService";
+
 const calculateEarlyTerminationPenalty = (prop, terminationDate) => {
   if (!prop || !prop.leaseStart || !prop.leaseEnd || !terminationDate) return 0;
   const start = new Date(prop.leaseStart);
@@ -1156,19 +1158,13 @@ const calculateEarlyTerminationPenalty = (prop, terminationDate) => {
   
   if (term >= end) return 0;
   
-  const diffTime = term.getTime() - start.getTime();
-  const diffDays = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
-  const activeMonths = diffDays / 30.4;
-  const rent = parseFloat(prop.rentAmount) || 0;
-  
-  if (activeMonths < 6) {
-    return 3 * rent;
-  } else if (activeMonths >= 6 && activeMonths < 9) {
-    return 1.5 * rent;
-  } else if (activeMonths >= 9 && activeMonths < 11) {
-    return 1 * rent;
+  try {
+    const res = calcPenaltyService(prop.leaseStart, terminationDate, prop.rentAmount);
+    return res.penalty;
+  } catch (e) {
+    console.error("[RentPortal] Early termination calculation error in service:", e);
+    return 0;
   }
-  return 0;
 };
 
 export default function LandlordProperties({ landlordId }) {

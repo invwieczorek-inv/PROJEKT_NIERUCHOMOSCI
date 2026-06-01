@@ -18,7 +18,13 @@ NIERUCHOMOSCI_ZARZAD/logs/
 Thumbs.db
 
 # Local env files
+.env
+.env.*
+!.env.example
 *.local
+
+# Generated documents
+NIERUCHOMOSCI_ZARZAD/public/generated_docs/
 
 # IDEs and editors
 .idea/

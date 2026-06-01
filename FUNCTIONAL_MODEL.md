@@ -254,3 +254,14 @@ Kod aplikacji został zaprojektowany z myślą o modułowości i czytelności, c
 ### 4. System IoT dla liczników (Automatyczne Odczyty Telemetryczne)
 * **Punkt w kodzie:** [storage.js](file:///Users/KRZYSZTOF/Documents/ANTIGRAVITY/NIERUCHOMOSCI_PROJECT/NIERUCHOMOSCI_ZARZAD/src/utils/storage.js) (funkcja `addMeterReading`)
 * **Jak rozszerzyć:** Zamiast ręcznego formularza lokatora, można wystawić endpoint API dla inteligentnych liczników IoT (np. ESP32 z nakładką optyczną). Urządzenie wysyła stan licznika raz na miesiąc, co automatycznie wyzwala funkcję `addMeterReading` ze statusem `approved`. System natychmiast kalkuluje koszty i dołącza je do najbliższej faktury bez zaangażowania człowieka.
+
+---
+
+## 📌 8. Wytyczne dla Dalszych Modyfikacji (AI Instructions)
+
+Wszyscy przyszli agenci AI pracujący nad tym projektem muszą bezwzględnie przestrzegać poniższych instrukcji operacyjnych:
+
+* **Punkt wyjścia (Baseline Reference):** Kod deweloperski został pomyślnie zamrożony, przetestowany i oznaczony w repozytorium Git pod oficjalnym tagiem stabilnym `v1.0.0` (oraz powiązanym z nim punktem odniesienia `v1.0.0-baseline`). Wszelkie nowe eksperymenty, gałęzie lub refaktoryzacje muszą bazować na tym punkcie.
+* **Nienaruszalna logika obliczeniowa:** Wszystkie kluczowe silniki matematyczne (ROI/ROE, taryfowy kosztorys mediów z 23% VAT, kalkulator kar kaucji oraz klasyfikacja Aging Debts) są krytycznymi modułami biznesowymi. Parsowanie danych wejściowych musi pozostać odporne na wartości puste (`NaN` / `null`) i zachowywać pełną zgodność wsteczną z obecnym modelem funkcjonalnym.
+* **Zasada modyfikacji schematów:** Przed jakąkolwiek próbą zmiany struktury bazy danych LocalStorage (`storage.js`), relacji lub typów danych, agent AI **musi** najpierw zaktualizować specyfikacje w plikach `SPECIFICATION.md` oraz `FUNCTIONAL_MODEL.md` i uzyskać bezpośrednią akceptację użytkownika przed edycją kodu produkcyjnego.
+

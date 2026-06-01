@@ -1,0 +1,30 @@
+# RentPortal - AI Instructions & Context Guidelines
+
+Ten plik zawiera kluczowe dyrektywy konfiguracyjne i architektoniczne dla agentów AI pracujących nad rozwojem lub utrzymaniem aplikacji RentPortal w przyszłości.
+
+---
+
+## 📌 1. Wytyczne dla Dalszych Modyfikacji (AI Instructions)
+
+* **Punkt wyjścia (Baseline Reference):** Kod deweloperski został pomyślnie zamrożony, przetestowany i oznaczony w repozytorium Git pod oficjalnym tagiem stabilnym `v1.0.0` (oraz powiązanym z nim punktem odniesienia `v1.0.0-baseline`). Wszelkie nowe eksperymenty, gałęzie lub refaktoryzacje muszą bazować na tym punkcie.
+* **Nienaruszalna logika obliczeniowa:** Wszystkie kluczowe silniki matematyczne (ROI/ROE, taryfowy kosztorys mediów z 23% VAT, kalkulator kar kaucji oraz klasyfikacja Aging Debts) są krytycznymi modułami biznesowymi. Parsowanie danych wejściowych musi pozostać odporne na wartości puste (`NaN` / `null`) i zachowywać pełną zgodność wsteczną z obecnym modelem funkcjonalnym.
+* **Zasada modyfikacji schematów:** Przed jakąkolwiek próbą zmiany struktury bazy danych LocalStorage (`storage.js`), relacji lub typów danych, agent AI **musi** najpierw zaktualizować specyfikacje w plikach `SPECIFICATION.md` oraz `FUNCTIONAL_MODEL.md` i uzyskać bezpośrednią akceptację użytkownika przed edycją kodu produkcyjnego.
+
+---
+
+## 🏗️ 2. Architektura i Konwencje Projektowe
+
+* **Jednokierunkowy przepływ danych (Unidirectional Data Flow):** Kategorycznie zabrania się wprowadzania mutacji w bazie danych bezpośrednio podczas cykli renderowania React. Zmiany muszą przechodzić przez warstwę transakcyjną `storage.js`, która po zatwierdzeniu zmian rozsyła globalne zdarzenie CustomEvent. Widoki synchronizują dane asynchronicznie za pośrednictwem hooków `useEffect` nasłuchujących na te zdarzenia.
+* **Separacja Stanów:** 
+  * Dane relacyjne najmu (Lokale, Najemcy, Notatki CRM, Timeline, Faktury, Liczniki, Chat) stanowią **stan globalny** utrwalany w LocalStorage.
+  * Formularze, filtry, wybrane wątki czatu, toast notification i stany modalne stanowią **stan lokalny** komponentów React.
+* **Ochrona bezpieczeństwa (Path Traversal):** Endpointy Vite server middleware w `vite.config.js` (szczególnie `/api/save-document`) muszą bezwzględnie oczyszczać wszelkie nadchodzące nazwy plików za pomocą metody `path.basename` w celu ochrony systemu plików przed atakami typu directory traversal.
+* **Ignorowanie plików dynamicznych:** Pliki generowane w czasie rzeczywistym w `public/generated_docs/` są trwale ignorowane w `.gitignore` i nie mogą być śledzone przez Git, aby zapobiec wyczerpaniu limitu LocalStorage i zaśmiecaniu kodu produkcyjnego.
+
+---
+
+## 🛠️ 3. Szybkie Narzędzia Deweloperskie
+
+* Port deweloperski aplikacji: `http://localhost:3457`
+* Uruchomienie lokalnego serwera: `npm run dev` (w katalogu `NIERUCHOMOSCI_ZARZAD`)
+* Weryfikacja budowania: `npm run build` (w katalogu `NIERUCHOMOSCI_ZARZAD` - czas kompilacji powinien wynosić ~400ms)

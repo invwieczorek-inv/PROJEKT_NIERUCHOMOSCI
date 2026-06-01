@@ -6,6 +6,11 @@ import {
   getPropertiesByTenant,
   calculateReadingCostVal
 } from "../../utils/storage";
+import { 
+  validateMeterReadingInput, 
+  calculateGasWaterHeatingCost, 
+  calculateDaysAndMonthsBetweenDates 
+} from "../../services/meterService";
 import { Gauge, CheckCircle2, Clock, XCircle, Send, Plus } from "lucide-react";
 
 const METER_TYPES = {
@@ -57,7 +62,33 @@ export default function TenantMeters({ tenantId }) {
   }, [selectedPropertyId, meterType]);
 
   const getCostString = (item) => {
-    const val = calculateReadingCostVal(item, history);
+    if (item.status !== "approved" && item.status !== "pending_approval") return "—";
+    
+    const prevReadingObj = history
+      .filter(m => 
+        m.property_id === item.property_id && 
+        m.meter_type === item.meter_type && 
+        (m.status === "approved" || m.status === "pending_approval") && 
+        new Date(m.reading_date) < new Date(item.reading_date)
+      )
+      .sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date))[0];
+
+    if (!prevReadingObj) return "—";
+
+    const Q = Number(item.reading_value) - Number(prevReadingObj.reading_value);
+    if (Q <= 0) return "0.00 PLN";
+
+    const { months } = calculateDaysAndMonthsBetweenDates(prevReadingObj.reading_date, item.reading_date);
+    
+    const stored = localStorage.getItem("rentportal_meter_rates");
+    let rates = null;
+    if (stored) {
+      try {
+        rates = JSON.parse(stored);
+      } catch (e) {}
+    }
+    
+    const val = calculateGasWaterHeatingCost(Q, months, item.meter_type, rates);
     if (val === 0) return "—";
     return `${val.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
   };
@@ -75,8 +106,10 @@ export default function TenantMeters({ tenantId }) {
       setErrorMsg("Błąd: Podaj numer seryjny licznika.");
       return;
     }
-    if (!readingValue || Number(readingValue) <= 0) {
-      setErrorMsg("Błąd: Podaj prawidłową dodatnią wartość odczytu.");
+    const prevVal = latestApproved ? latestApproved.reading_value : null;
+    const validation = validateMeterReadingInput(readingValue, prevVal, meterType);
+    if (!validation.isValid) {
+      setErrorMsg("Błąd: " + validation.errors.value);
       return;
     }
 

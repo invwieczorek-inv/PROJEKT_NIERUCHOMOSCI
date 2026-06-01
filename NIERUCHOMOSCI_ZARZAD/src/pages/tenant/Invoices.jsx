@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { getInvoicesForTenant, getPropertyById, getPaymentTimeliness } from "../../utils/storage";
 import { CreditCard, CheckCircle, AlertTriangle, Calendar, FileText } from "lucide-react";
+import { calculateTenantFinancialSummary } from "../../services/tenantService";
 
 export default function TenantInvoices({ tenantId }) {
   const [invoices, setInvoices] = useState([]);
@@ -18,15 +19,52 @@ export default function TenantInvoices({ tenantId }) {
     };
   }, [tenantId]);
 
+  const summary = calculateTenantFinancialSummary(invoices);
+
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-white font-sans flex items-center gap-2">
-          <CreditCard className="w-6 h-6 text-brand-400" />
-          Moje Rachunki i Faktury
-        </h2>
-        <p className="text-dark-400 text-sm mt-1">Przeglądaj swoje opłaty czynszowe oraz rozliczenia mediów.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-white font-sans flex items-center gap-2">
+            <CreditCard className="w-6 h-6 text-brand-400" />
+            Moje Rachunki i Faktury
+          </h2>
+          <p className="text-dark-400 text-sm mt-1">Przeglądaj swoje opłaty czynszowe oraz rozliczenia mediów.</p>
+        </div>
+
+        {invoices.length > 0 && (
+          <div className={`px-4 py-2 rounded-xl border font-sans text-xs flex items-center gap-2 shrink-0 ${
+            summary.balance < 0 
+              ? 'bg-red-500/10 border-red-500/20 text-red-400' 
+              : summary.balance > 0 
+              ? 'bg-green-500/10 border-green-500/20 text-green-400'
+              : 'bg-green-500/10 border-green-500/20 text-green-400'
+          }`}>
+            <span>Moje ogólne saldo:</span>
+            <strong className="font-extrabold text-sm font-mono">
+              {summary.balance > 0 ? `+${summary.balance.toFixed(2)}` : summary.balance.toFixed(2)} PLN
+            </strong>
+          </div>
+        )}
       </div>
+
+      {/* Financial Aggregates Cards Panel */}
+      {invoices.length > 0 && (
+        <div className="grid grid-cols-3 gap-4">
+          <div className="glass p-4 rounded-xl border-dark-800 text-center">
+            <span className="text-xxs text-dark-500 block uppercase font-bold tracking-wider mb-1">Czynsze Najmu</span>
+            <span className="text-sm sm:text-base font-extrabold text-white font-mono">{summary.rent.toFixed(2)} PLN</span>
+          </div>
+          <div className="glass p-4 rounded-xl border-dark-800 text-center">
+            <span className="text-xxs text-dark-500 block uppercase font-bold tracking-wider mb-1">Koszty Admin.</span>
+            <span className="text-sm sm:text-base font-extrabold text-white font-mono">{summary.admin.toFixed(2)} PLN</span>
+          </div>
+          <div className="glass p-4 rounded-xl border-dark-800 text-center">
+            <span className="text-xxs text-dark-500 block uppercase font-bold tracking-wider mb-1">Rozliczenia Mediów</span>
+            <span className="text-sm sm:text-base font-extrabold text-white font-mono">{summary.utilities.toFixed(2)} PLN</span>
+          </div>
+        </div>
+      )}
  
       {/* Tabelaryczne Zestawienie Opłat Czynszowych */}
       {invoices.length > 0 && (

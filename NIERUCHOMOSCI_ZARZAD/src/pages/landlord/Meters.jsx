@@ -10,6 +10,12 @@ import {
   deleteMeterReading,
   updateMeterReadingValue
 } from "../../utils/storage";
+import { 
+  groupMetersByProperty, 
+  validateMeterReadingInput, 
+  calculateGasWaterHeatingCost, 
+  calculateDaysAndMonthsBetweenDates 
+} from "../../services/meterService";
 import { Gauge, Check, X, Clock, Activity, Info, Plus, Coins, Zap, Flame, Calendar, Sparkles, Edit, Trash2, Building } from "lucide-react";
 
 const METER_TYPES = {
@@ -77,13 +83,7 @@ export default function LandlordMeters({ landlordId }) {
 
   const propertiesWithReadings = useMemo(() => {
     const landlordProperties = getPropertiesByLandlord(landlordId);
-    return landlordProperties.map(p => {
-      const propReadings = meters.filter(m => m.property_id === p.id);
-      return {
-        ...p,
-        readings: propReadings.sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date))
-      };
-    });
+    return groupMetersByProperty(meters, landlordProperties);
   }, [meters, landlordId]);
 
   useEffect(() => {
@@ -132,16 +132,27 @@ export default function LandlordMeters({ landlordId }) {
       setErrorMsg("Wybierz mieszkanie.");
       return;
     }
-    if (!readingValue || Number(readingValue) <= 0) {
-      setErrorMsg("Wpisz poprawny stan odczytu licznika.");
-      return;
-    }
     if (!meterNumber.trim()) {
       setErrorMsg("Wpisz numer seryjny licznika.");
       return;
     }
     if (!readingDate) {
       setErrorMsg("Wybierz datę odczytu.");
+      return;
+    }
+
+    const prevReadingObj = meters
+      .filter(m => 
+        m.property_id === selectedPropertyId && 
+        m.meter_type === selectedMeterType && 
+        (m.status === "approved" || m.status === "pending_approval")
+      )
+      .sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date))[0];
+    const prevVal = prevReadingObj ? prevReadingObj.reading_value : null;
+
+    const validation = validateMeterReadingInput(readingValue, prevVal, selectedMeterType);
+    if (!validation.isValid) {
+      setErrorMsg(validation.errors.value);
       return;
     }
 
@@ -175,8 +186,18 @@ export default function LandlordMeters({ landlordId }) {
     const val = data?.val;
     const date = data?.date || new Date().toISOString().split("T")[0];
 
-    if (val === undefined || val === "" || Number(val) < 0) {
-      setErrorMsg("Wpisz poprawną wartość odczytu.");
+    const prevReadingObj = meters
+      .filter(m => 
+        m.property_id === propId && 
+        m.meter_type === medium && 
+        (m.status === "approved" || m.status === "pending_approval")
+      )
+      .sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date))[0];
+    const prevVal = prevReadingObj ? prevReadingObj.reading_value : null;
+
+    const validation = validateMeterReadingInput(val, prevVal, medium);
+    if (!validation.isValid) {
+      setErrorMsg(validation.errors.value);
       return;
     }
 
@@ -260,46 +281,9 @@ export default function LandlordMeters({ landlordId }) {
     const Q = Number(item.reading_value) - Number(prevReadingObj.reading_value);
     if (Q <= 0) return "0.00 PLN";
 
-    const diffTime = new Date(item.reading_date).getTime() - new Date(prevReadingObj.reading_date).getTime();
-    const diffDays = Math.max(1, Math.round(diffTime / (1000 * 60 * 60 * 24)));
-    const M = Math.round((diffDays / 30.4) * 10) / 10 || 1.0;
-
-    if (item.meter_type === "electricity") {
-      const net_cons = Q * (
-        Number(rates.electricity.active_energy || 0) + 
-        Number(rates.electricity.network_variable || 0) + 
-        Number(rates.electricity.quality_fee || 0) + 
-        Number(rates.electricity.oze_fee || 0) + 
-        Number(rates.electricity.co_generation_fee || 0)
-      );
-      const net_fixed = M * (
-        Number(rates.electricity.subscription_fee || 0) + 
-        Number(rates.electricity.transitional_fee || 0) + 
-        Number(rates.electricity.network_fixed || 0) + 
-        Number(rates.electricity.capacity_fee || 0)
-      );
-      const gross = (net_cons + net_fixed) * 1.23 + (M * Number(rates.electricity.billing_service_fee || 0));
-      return `${gross.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
-    } else if (item.meter_type === "gas") {
-      const net_cons = Q * (
-        Number(rates.gas.variable_distribution || 0) + 
-        Number(rates.gas.gas_fuel || 0)
-      );
-      const net_fixed = M * (
-        Number(rates.gas.handling_fee || 0) + 
-        Number(rates.gas.fixed_distribution || 0)
-      );
-      const gross = (net_cons + net_fixed) * 1.23;
-      return `${gross.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
-    } else if (item.meter_type === "water_cold") {
-      return `${(Q * 12.0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
-    } else if (item.meter_type === "water_hot") {
-      return `${(Q * 35.0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
-    } else if (item.meter_type === "heating") {
-      return `${(Q * 80.0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
-    }
-
-    return "—";
+    const { months } = calculateDaysAndMonthsBetweenDates(prevReadingObj.reading_date, item.reading_date);
+    const gross = calculateGasWaterHeatingCost(Q, months, item.meter_type, rates);
+    return `${gross.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
   };
 
   const handleApprove = (id) => {
@@ -1017,8 +1001,19 @@ export default function LandlordMeters({ landlordId }) {
               onSubmit={(e) => {
                 e.preventDefault();
                 setModalError("");
-                if (!editValue || Number(editValue) <= 0) {
-                  setModalError("Wpisz poprawną wartość odczytu.");
+                const prevReadingObj = meters
+                  .filter(m => 
+                    m.property_id === editingReading.property_id && 
+                    m.meter_type === editingReading.meter_type && 
+                    (m.status === "approved" || m.status === "pending_approval") &&
+                    new Date(m.reading_date) < new Date(editingReading.reading_date)
+                  )
+                  .sort((a, b) => new Date(b.reading_date) - new Date(a.reading_date))[0];
+                const prevVal = prevReadingObj ? prevReadingObj.reading_value : null;
+
+                const validation = validateMeterReadingInput(editValue, prevVal, editingReading.meter_type);
+                if (!validation.isValid) {
+                  setModalError(validation.errors.value);
                   return;
                 }
                 try {

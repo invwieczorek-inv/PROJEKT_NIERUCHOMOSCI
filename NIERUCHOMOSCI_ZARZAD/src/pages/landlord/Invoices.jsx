@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { validateInvoiceInputs, calculatePDFStatementTotals } from "../../services/billingService";
 import { 
   getInvoices, 
   bookInvoicePayment, 
@@ -764,20 +765,19 @@ export default function LandlordInvoices({ landlordId }) {
       setErrorMsg("Podaj tytuł faktury.");
       return;
     }
-    if (!amountRent || Number(amountRent) < 0) {
-      setErrorMsg("Czynsz najmu z umowy musi być poprawną kwotą.");
-      return;
-    }
-    if (!amountAdmin || Number(amountAdmin) < 0) {
-      setErrorMsg("Czynsz administracyjny musi być poprawną kwotą.");
-      return;
-    }
-    if (!amountUtilities || Number(amountUtilities) < 0) {
-      setErrorMsg("Opłata za media musi być poprawną kwotą.");
-      return;
-    }
-    if (!dueDate) {
-      setErrorMsg("Podaj termin płatności.");
+
+    const validation = validateInvoiceInputs(
+      selectedPropertyId,
+      amountRent,
+      amountAdmin,
+      amountUtilities,
+      new Date().toISOString().split('T')[0],
+      dueDate
+    );
+
+    if (!validation.isValid) {
+      const firstError = Object.values(validation.errors)[0];
+      setErrorMsg(firstError);
       return;
     }
 
@@ -787,7 +787,7 @@ export default function LandlordInvoices({ landlordId }) {
         throw new Error("Wybrany lokal nie ma przypisanego lokatora.");
       }
 
-      const totalAmount = Number(amountRent) + Number(amountAdmin) + Number(amountUtilities);
+      const totalAmount = validation.data.total;
 
       addInvoice({
         property_id: selectedPropertyId,
@@ -1809,21 +1809,13 @@ export default function LandlordInvoices({ landlordId }) {
       : "Pełna historia";
 
     // Summary calculations
-    let totalRent = 0;
-    let totalAdmin = 0;
-    let totalUtilities = 0;
-    let totalInvoiced = 0;
-    let totalPaid = 0;
-    
-    filteredInvoices.forEach(inv => {
-      totalRent += inv.amountRent || 0;
-      totalAdmin += inv.amountAdmin || 0;
-      totalUtilities += inv.amountUtilities || 0;
-      totalInvoiced += inv.amount || 0;
-      totalPaid += inv.receivedPayment || 0;
-    });
-    
-    const totalBalance = totalPaid - totalInvoiced;
+    const totals = calculatePDFStatementTotals(filteredInvoices);
+    const totalRent = totals.rent;
+    const totalAdmin = totals.admin;
+    const totalUtilities = totals.utilities;
+    const totalInvoiced = totals.total;
+    const totalPaid = totals.paid;
+    const totalBalance = totals.balance;
 
     // Generate table rows
     const tableRows = filteredInvoices.map((inv) => {

@@ -7,6 +7,7 @@ import {
   getDocumentsForTenant,
   openDocumentFile
 } from "../../utils/storage";
+import { calculateLeaseCountdown, classifyLeaseAlert } from "../../services/tenantService";
 import TenantInvoices from "./Invoices";
 import TenantMeters from "./Meters";
 import TenantMessages from "./Messages";
@@ -189,25 +190,20 @@ export default function TenantDashboard({ activeUser }) {
                     {property.leaseStart || 'brak'} do {property.property_id ? property.leaseEnd : 'brak'}
                   </span>
                 </div>
-                {property.leaseEnd && (
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-dark-400">Okres najmu:</span>
-                    {(() => {
-                      const endDate = new Date(property.leaseEnd);
-                      const today = new Date();
-                      endDate.setHours(0, 0, 0, 0);
-                      today.setHours(0, 0, 0, 0);
-                      const diffDays = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
-                      const isOver = diffDays < 0;
-                      const isWarning = diffDays <= 40;
-                      return (
-                        <span className={`font-semibold flex items-center gap-1 ${isOver || isWarning ? 'text-red-400 font-bold' : 'text-green-400'}`}>
-                          ⏱️ {isOver ? `Zakończona (${Math.abs(diffDays)} dni temu)` : `Pozostało dni: ${diffDays}`}
-                        </span>
-                      );
-                    })()}
-                  </div>
-                )}
+
+                {property.leaseEnd && (() => {
+                  const termDate = property.earlyTermination ? property.earlyTermination.terminationDate : null;
+                  const days = calculateLeaseCountdown(property.leaseEnd, property.leaseStart, termDate);
+                  const alert = classifyLeaseAlert(days);
+                  return (
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-dark-400">Okres najmu:</span>
+                      <span className={`font-semibold flex items-center gap-1 ${alert.colorClass}`}>
+                        ⏱️ {alert.message}
+                      </span>
+                    </div>
+                  );
+                })()}
                 {property.earlyTermination && (
                   <div className="bg-amber-500/10 border border-amber-500/20 text-amber-300 p-3 rounded-xl text-xxs mt-2 space-y-1 text-left w-full font-sans">
                     <strong className="block text-amber-400">⚠️ Umowa rozwiązana przed czasem!</strong>
@@ -215,12 +211,10 @@ export default function TenantDashboard({ activeUser }) {
                       Data rozwiązania: <strong>{property.earlyTermination.terminationDate}</strong>
                     </div>
                     {(() => {
-                      const endDate = new Date(property.leaseEnd);
-                      const termDate = new Date(property.earlyTermination.terminationDate);
-                      const diff = Math.ceil((endDate - termDate) / (1000 * 60 * 60 * 24));
+                      const daysSaved = calculateLeaseCountdown(property.leaseEnd, property.earlyTermination.terminationDate);
                       return (
                         <div className="text-[10px] text-amber-200">
-                          Rozwiązano przed czasem o: <strong>{diff} dni</strong>
+                          Rozwiązano przed czasem o: <strong>{daysSaved} dni</strong>
                         </div>
                       );
                     })()}

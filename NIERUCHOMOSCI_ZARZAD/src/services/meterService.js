@@ -56,7 +56,7 @@ export const calculateDaysAndMonthsBetweenDates = (dateStr1, dateStr2) => {
  * @param {string} meterType 
  * @returns {object} Validation status, errors, and parsed value
  */
-export const validateMeterReadingInput = (currentValue, previousValue = null, meterType = "") => {
+export const validateMeterReadingInput = (currentValue, previousValue = null) => {
   const errors = {};
   
   if (currentValue === undefined || currentValue === null || currentValue === "") {
@@ -151,3 +151,4 @@ export const calculateGasWaterHeatingCost = (Q, M, type, customRates = null) => 
 
   return 0;
 };
+// End of meterService.js module

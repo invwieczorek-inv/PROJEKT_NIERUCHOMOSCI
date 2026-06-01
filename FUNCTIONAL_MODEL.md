@@ -108,23 +108,51 @@ sequenceDiagram
     UI->>DB: Zapisanie wyłącznie lekkiego linku w bazie LocalStorage (Obejście limitu 5MB!)
 ```
 
-### 🧮 Główne Silniki Matematyczne i Przetwarzanie Danych
+### 🚫 Brak Pętli Danych (Unidirectional Data Flow Enforcement)
+W architekturze RentPortal **wykluczono powstawanie pętli danych (infinite loop render / cyclical dependency)** poprzez ścisłe przestrzeganie jednokierunkowego przepływu danych (Flux/React Paradigm):
+
+```mermaid
+graph LR
+    View[Widok / Komponent React] -->|1. Akcja Użytkownika| StorageWrite[storage.js - Metoda Zapisująca]
+    StorageWrite -->|2. Aktualizacja i Commit| LS[(LocalStorage DB)]
+    StorageWrite -->|3. Emisja Zdarzenia| Dispatch[CustomEvent Dispatcher]
+    Dispatch -->|4. Wyzwolenie nasłuchu w useEffect| View
+```
+
+1. **Brak sprzężeń zwrotnych bezpośrednio z renderera:** Wartości obliczeniowe (np. taryfy mediów, ROI/ROE) są funkcjami czystymi (pure functions). Żaden widok nie modyfikuje bazy danych bezpośrednio w trakcie cyklu renderowania (brak wywołań mutujących stan wewnątrz JSX lub głównego ciała funkcji komponentu).
+2. **Asynchroniczne wyzwalanie zdarzeń:** Zapisy w `storage.js` są wykonywane synchronicznie jako transakcja (np. `saveItems`), po czym następuje rozesłanie zdarzenia `window.dispatchEvent` w tle. React przechwytuje te zdarzenia wyłącznie za pomocą hooka `useEffect`, który wyzwala kontrolowane przeładowanie danych do stanu lokalnego komponentu (`setItems`), odcinając możliwość powstania nieskończonej pętli aktualizacji stanów.
+
+---
+
+## 💾 3. Stan Lokalny (Local State) vs Stan Globalny (Global State)
+
+System ściśle rozdziela stany, które muszą być utrwalone w bazie danych, od stanów tymczasowych, sterujących wyłącznie warstwą prezentacji.
+
+| Kategoria Stanu | Lokalizacja / Przechowywanie | Zakres (Scope) | Przykład i Rola |
+| :--- | :--- | :--- | :--- |
+| **Stan Globalny (Utrwalany)** | Baza LocalStorage (`storage.js` / `USERS`, `PROPERTIES`, `INVOICES`, `METERS`, `MESSAGES`) | Cała aplikacja. Wspólny dla widoków Właściciela i Lokatora. Synchronizowany reaktywnie. | Dane umów, przypisanie lokatorów, zarejestrowane faktury, wpłaty, zatwierdzone liczniki, wiadomości i monity czatu. |
+| **Stan Lokalny Komponentu (Tymczasowy)** | Hook `useState` w konkretnych plikach `.jsx` | Izolowany do danego komponentu/modułu UI. Ulega wyczyszczeniu przy przejściu na inną zakładkę lub odświeżeniu strony. | Dane wpisywane do formularza edycji licznika, wybrany wątek na czacie, tymczasowe filtry wyszukiwania na liście anomalii, stan otwarcia modalu (isOpen), wartości suwaków ROI, wpisywane notatki w polu tekstowym przed zapisem. |
+| **Stan Sesji Symulatora** | LocalStorage (`rentportal_session_v3`) | Globalny dla symulatora ról. | Określa, czy aktualnie symulujemy rolę Właściciela (Krzysztof), czy wybranego Lokatora, sterując w ten sposób routingiem i filtrowaniem uprawnień widoków. |
+
+---
+
+## 🧮 4. Główne Silniki Matematyczne i Przetwarzanie Danych
 
 Aplikacja posiada zaawansowane silniki kalkulacyjne działające bezpośrednio po stronie klienta:
 
-#### 1. Silnik ROI / ROE (Rentowność Inwestycji)
+### 1. Silnik ROI / ROE (Rentowność Inwestycji)
 Ocenia finansową efektywność danej nieruchomości lub całego portfela:
 $$\text{NOI (Realny Zysk Operacyjny Netto)} = \text{Suma czynszów najmu} - \text{Koszty administracyjne spółdzielni} - \text{Ubezpieczenia} - \text{Remonty i naprawy} - \text{Podatek zryczałtowany (8.5\%)}$$
 $$\text{ROI (Return on Investment)} = \frac{\text{NOI} \times 12}{\text{Wartość rynkowa nieruchomości}} \times 100\%$$
 $$\text{ROE (Return on Equity)} = \frac{(\text{NOI} - \text{Rata kredytu}) \times 12}{\text{Wkład własny (Equity)}} \times 100\%$$
 
-#### 2. Kosztowy Silnik Taryfowy Mediów (Meters Engine)
+### 2. Kosztowy Silnik Taryfowy Mediów (Meters Engine)
 Oblicza koszt zużycia mediów na podstawie odczytów liczników i składowych taryfowych:
 $$\text{Zużycie (Q)} = \text{Odczyt bieżący} - \text{Odczyt poprzedni (Baseline)}$$
 $$\text{Okres czasu (M)} = \frac{\text{Różnica dni między odczytami}}{30.4} \text{ (ułamek miesiąca)}$$
 $$\text{Koszt Brutto (Prąd/Gaz)} = \left[ (Q \times \text{Stawka zmienna}) + (M \times \text{Opłata stała abonentowa}) \right] \times 1.23 \text{ (23% VAT)}$$
 
-#### 3. Silnik Kar Kaucji za Przedterminowe Rozwiązanie Umowy
+### 3. Silnik Kar Kaucji za Przedterminowe Rozwiązanie Umowy
 Wylicza kwotę potrącenia z kaucji w przypadku opuszczenia lokalu przed terminem:
 $$\text{Kara} = \begin{cases} 
 3 \times \text{Czynsz} & \text{gdy czas trwania najmu} < 6 \text{ mies.} \\ 
@@ -133,7 +161,7 @@ $$\text{Kara} = \begin{cases}
 0 \text{ PLN} & \text{gdy najem trwa powyżej } 11 \text{ mies.} 
 \end{cases}$$
 
-#### 4. Silnik Klasyfikacji Ryzyka Płatności (Aging Debts Widget)
+### 4. Silnik Klasyfikacji Ryzyka Płatności (Aging Debts Widget)
 Analizuje opóźnienia faktur względem daty referencyjnej (`2026-06-01`):
 * **Niskie ryzyko** (Low): Opóźnienie płatności $1 - 3$ dni.
 * **Średnie ryzyko** (Medium): Opóźnienie płatności $4 - 9$ dni.
@@ -142,7 +170,36 @@ Analizuje opóźnienia faktur względem daty referencyjnej (`2026-06-01`):
 
 ---
 
-## 📝 3. Stan Obecny (Działające Funkcjonalności)
+## 🛡️ 5. Obsługa Przypadków Brzegowych w Kalkulatorach (Validation & Edge Cases)
+
+W celu ochrony przed awariami aplikacji wywołanymi wprowadzeniem niepoprawnych typów danych lub pustych pól, RentPortal stosuje **restrykcyjny system walidacji brzegowej**:
+
+### 🚫 Walidacja Pustych Wartości i Złych Typów (Non-Numeric Protection)
+* **Zabezpieczenie parsowania:** Przy przetwarzaniu pól kwot (np. czynsz najmu, stawki taryfowe mediów, wkład własny) wartości są poddawane natychmiastowej konwersji i zabezpieczeniu przed wartościami pustymi/nieliczbowymi:
+  ```javascript
+  const parseAmount = (val) => {
+    const parsed = parseFloat(val);
+    return isNaN(parsed) || parsed < 0 ? 0 : parsed;
+  };
+  ```
+* **Wpływ na Silnik ROI:** Zapobiega to powstawaniu wartości `NaN` na ekranie finansowym, zastępując je bezpieczną wartością `0.00 PLN` w przypadku braku wpisu.
+
+### 🧮 Zabezpieczenie przed Dzieleniem przez Zero (Division by Zero)
+* **Problem:** W silnikach ROI/ROE brak wpisanej wartości nieruchomości lub wkładu własnego (wartości równe 0) wywołałby błędy matematyczne typu `Infinity` lub `NaN`.
+* **Rozwiązanie w kodzie:** Silniki kalkulacyjne zawierają twarde warunki logiczne blokujące dzielenie:
+  ```javascript
+  const calculatedROI = propertyValue > 0 ? (annualNOI / propertyValue) * 100 : 0;
+  const calculatedROE = equityValue > 0 ? (annualNetProfit / equityValue) * 100 : 0;
+  ```
+  Jeśli parametry te wynoszą 0, system bezpiecznie wyświetla rentowność na poziomie `0.00%`.
+
+### 📅 Logika Chronologii Dat (Chronological Clamping)
+* **Chronologia najmu:** Przy przypisywaniu najemcy lub generowaniu umów, system blokuje możliwość ustawienia daty zakończenia umowy przed datą jej rozpoczęcia. Formularze posiadają wbudowane walidatory `min` na polach typu `date`, a silnik osi czasu clampuje wartości ujemne do zera.
+* **Puste daty odczytów:** Brak podanej daty odczytu licznika skutkuje automatycznym przypisaniem bieżącej daty systemowej (`new Date().toISOString().split('T')[0]`), co zapobiega crashom kalkulatora czasu trwania taryf.
+
+---
+
+## 📝 6. Stan Obecny (Działające Funkcjonalności)
 
 Aplikacja RentPortal posiada w pełni ukończony, przetestowany i zintegrowany zestaw funkcji biznesowych:
 
@@ -178,7 +235,7 @@ Aplikacja RentPortal posiada w pełni ukończony, przetestowany i zintegrowany z
 
 ---
 
-## 🔮 4. Punkty Rozszerzeń (Extension Points)
+## 🔮 7. Punkty Rozszerzeń (Extension Points)
 
 Kod aplikacji został zaprojektowany z myślą o modułowości i czytelności, co pozwala na łatwe wdrażanie nowych funkcjonalności w wyznaczonych punktach:
 
